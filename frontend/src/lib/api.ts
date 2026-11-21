@@ -1,0 +1,153 @@
+import type { AuthUser } from '@/types/iems';
+
+const TOKEN_KEY = 'iems_token';
+const USER_KEY = 'iems_user';
+const WELCOME_KEY = 'iems_show_welcome';
+
+export const authStorage = {
+  getToken(): string | null {
+    try {
+      return sessionStorage.getItem(TOKEN_KEY);
+    } catch {
+      return null;
+    }
+  },
+  getUser(): AuthUser | null {
+    try {
+      const raw = sessionStorage.getItem(USER_KEY);
+      return raw ? (JSON.parse(raw) as AuthUser) : null;
+    } catch {
+      return null;
+    }
+  },
+  setSession(token: string, user: AuthUser, showWelcome = false) {
+    try {
+      sessionStorage.setItem(TOKEN_KEY, token);
+      sessionStorage.setItem(USER_KEY, JSON.stringify(user));
+      if (showWelcome) sessionStorage.setItem(WELCOME_KEY, '1');
+    } catch {
+      // ignore storage errors
+    }
+  },
+  updateUser(user: AuthUser) {
+    try {
+      sessionStorage.setItem(USER_KEY, JSON.stringify(user));
+    } catch {
+      // ignore storage errors
+    }
+  },
+  consumeWelcome(): boolean {
+    try {
+      const show = sessionStorage.getItem(WELCOME_KEY) === '1';
+      if (show) sessionStorage.removeItem(WELCOME_KEY);
+      return show;
+    } catch {
+      return false;
+    }
+  },
+  clear() {
+    try {
+      sessionStorage.removeItem(TOKEN_KEY);
+      sessionStorage.removeItem(USER_KEY);
+      sessionStorage.removeItem(WELCOME_KEY);
+    } catch {
+      // ignore storage errors
+    }
+  },
+};
+
+export class ApiError extends Error {
+  status: number;
+  data?: Record<string, unknown>;
+  constructor(message: string, status: number, data?: Record<string, unknown>) {
+    super(message);
+    this.status = status;
+    this.data = data;
+  }
+}
+
+let onUnauthorizedCallback: (() => void) | null = null;
+export function setUnauthorizedHandler(fn: () => void) {
+  onUnauthorizedCallback = fn;
+}
+
+export async function api<T = unknown>(path: string, opts: RequestInit = {}): Promise<T> {
+  const token = authStorage.getToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(opts.headers as Record<string, string> | undefined),
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(path, { ...opts, headers });
+  if (res.status === 401) {
+    if (!path.startsWith('/api/auth/login')) {
+      authStorage.clear();
+      onUnauthorizedCallback?.();
+    }
+  }
+  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok) {
+    throw new ApiError(String(data.error || 'حدث خطأ غير متوقع'), res.status, data);
+  }
+  return data as T;
+}
+
+export function apiUploadWithProgress<T = unknown>(
+  path: string,
+  bodyStr: string,
+  onUploadProgress?: (fraction: number) => void
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const token = authStorage.getToken();
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', path);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.responseType = 'text';
+
+    if (xhr.upload && onUploadProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && e.total > 0) {
+          onUploadProgress(e.loaded / e.total);
+        }
+      };
+      xhr.upload.onload = () => onUploadProgress(1);
+    }
+
+    xhr.onerror = () => reject(new Error('تعذّر الاتصال بالخادم.'));
+    xhr.ontimeout = () => reject(new Error('انتهت مهلة الطلب.'));
+    xhr.onload = () => {
+      if (xhr.status === 401) {
+        authStorage.clear();
+        onUnauthorizedCallback?.();
+        reject(new Error('انتهت الجلسة'));
+        return;
+      }
+      let data: Record<string, unknown> = {};
+      try {
+        data = JSON.parse(xhr.responseText || '{}');
+      } catch {
+        // ignore parse errors
+      }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(String(data.error || 'حدث خطأ أثناء العملية.')));
+        return;
+      }
+      resolve(data as T);
+    };
+    xhr.send(bodyStr);
+  });
+}
+
+export async function fetchAuthenticatedBlobUrl(path: string): Promise<string | null> {
+  const token = authStorage.getToken();
+  if (!token) return null;
+  const res = await fetch(path, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: 'no-store',
+  });
+  if (!res.ok) return null;
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
