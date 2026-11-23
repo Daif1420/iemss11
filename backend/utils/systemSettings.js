@@ -58,6 +58,8 @@ const DEFAULT_SYSTEM_CONFIG = {
     allowSupervisorExport: true,
     systemNoticeEnabled: false,
     systemNoticeText: '',
+    seasonalTheme: 'default',
+    seasonalDecorEnabled: true,
   },
   departmentsAndLists: {
     companies: DEFAULT_COMPANIES,
@@ -83,7 +85,24 @@ const DEFAULT_SYSTEM_CONFIG = {
     lastRunAt: null,
     lastDeletedSummary: null,
   },
+  reportsAndSheets: {
+    reportSize: 'normal',
+    reportOrientation: 'auto',
+    tableAlignH: 'center',
+    tableAlignV: 'middle',
+    pageVerticalAlign: 'top',
+    sheetStageBlockRows: 16,
+    pdfMaxDatesPerBlock: 16,
+    monthDaysCount: 'auto',
+    targetPercentageColumn: 'auto',
+  },
 };
+
+function sanitizeTargetColumnSetting(raw) {
+  const s = String(raw ?? 'auto').trim().toUpperCase();
+  if (!s || s === 'AUTO') return 'auto';
+  return /^[A-Z]{1,2}$/.test(s) ? s : 'auto';
+}
 
 function sanitizeHttpsUrl(raw, fallback = '') {
   const s = String(raw || '').trim();
@@ -170,6 +189,10 @@ async function getSystemConfig() {
       : {};
   const ap = saved.autoPurge && typeof saved.autoPurge === 'object' ? saved.autoPurge : {};
   const apCats = ap.categories && typeof ap.categories === 'object' ? ap.categories : {};
+  const rs =
+    saved.reportsAndSheets && typeof saved.reportsAndSheets === 'object'
+      ? saved.reportsAndSheets
+      : {};
 
   const stagesFromFallback =
     Array.isArray(fallbackStagesSaved.stages) && fallbackStagesSaved.stages.length
@@ -218,6 +241,11 @@ async function getSystemConfig() {
         df.allowSupervisorExport === undefined ? true : Boolean(df.allowSupervisorExport),
       systemNoticeEnabled: Boolean(df.systemNoticeEnabled),
       systemNoticeText: String(df.systemNoticeText || '').trim().slice(0, 300),
+      seasonalTheme: ['default', 'new_year', 'ramadan', 'emerald'].includes(String(df.seasonalTheme))
+        ? String(df.seasonalTheme)
+        : 'default',
+      seasonalDecorEnabled:
+        df.seasonalDecorEnabled === undefined ? true : Boolean(df.seasonalDecorEnabled),
     },
     departmentsAndLists: {
       companies: cleanStringList(dl.companies, DEFAULT_COMPANIES),
@@ -245,6 +273,27 @@ async function getSystemConfig() {
       },
       lastRunAt: ap.lastRunAt || null,
       lastDeletedSummary: ap.lastDeletedSummary || null,
+    },
+    reportsAndSheets: {
+      reportSize: ['compact', 'normal', 'large'].includes(rs.reportSize) ? rs.reportSize : 'normal',
+      reportOrientation: ['auto', 'portrait', 'landscape'].includes(rs.reportOrientation)
+        ? rs.reportOrientation
+        : 'auto',
+      tableAlignH: ['center', 'right', 'left'].includes(rs.tableAlignH)
+        ? rs.tableAlignH
+        : 'center',
+      tableAlignV: ['middle', 'top', 'bottom'].includes(rs.tableAlignV)
+        ? rs.tableAlignV
+        : 'middle',
+      pageVerticalAlign: ['top', 'center'].includes(rs.pageVerticalAlign)
+        ? rs.pageVerticalAlign
+        : 'top',
+      sheetStageBlockRows: clampInt(rs.sheetStageBlockRows, 16, 40, 16),
+      pdfMaxDatesPerBlock: clampInt(rs.pdfMaxDatesPerBlock, 8, 31, 16),
+      monthDaysCount: ['auto', '30', '31'].includes(String(rs.monthDaysCount))
+        ? String(rs.monthDaysCount)
+        : 'auto',
+      targetPercentageColumn: sanitizeTargetColumnSetting(rs.targetPercentageColumn),
     },
   };
 }
@@ -287,6 +336,12 @@ async function saveSystemConfig(partial, updatedBy = null) {
           ? partial.autoPurge.categories
           : {}),
       },
+    },
+    reportsAndSheets: {
+      ...cur.reportsAndSheets,
+      ...(partial.reportsAndSheets && typeof partial.reportsAndSheets === 'object'
+        ? partial.reportsAndSheets
+        : {}),
     },
   };
 
@@ -361,6 +416,15 @@ async function saveSystemConfig(partial, updatedBy = null) {
     allowSupervisorExport: Boolean(next.displayAndFeatures.allowSupervisorExport),
     systemNoticeEnabled: Boolean(next.displayAndFeatures.systemNoticeEnabled),
     systemNoticeText: String(next.displayAndFeatures.systemNoticeText || '').trim().slice(0, 300),
+    seasonalTheme: ['default', 'new_year', 'ramadan', 'emerald'].includes(
+      String(next.displayAndFeatures.seasonalTheme)
+    )
+      ? String(next.displayAndFeatures.seasonalTheme)
+      : 'default',
+    seasonalDecorEnabled:
+      next.displayAndFeatures.seasonalDecorEnabled === undefined
+        ? true
+        : Boolean(next.displayAndFeatures.seasonalDecorEnabled),
   };
 
   next.departmentsAndLists.companies = cleanStringList(
@@ -381,6 +445,31 @@ async function saveSystemConfig(partial, updatedBy = null) {
   );
 
   next.autoPurge.retentionMonths = clampInt(next.autoPurge.retentionMonths, 1, 36, 3);
+
+  const rsNext = next.reportsAndSheets || {};
+  next.reportsAndSheets = {
+    reportSize: ['compact', 'normal', 'large'].includes(rsNext.reportSize)
+      ? rsNext.reportSize
+      : 'normal',
+    reportOrientation: ['auto', 'portrait', 'landscape'].includes(rsNext.reportOrientation)
+      ? rsNext.reportOrientation
+      : 'auto',
+    tableAlignH: ['center', 'right', 'left'].includes(rsNext.tableAlignH)
+      ? rsNext.tableAlignH
+      : 'center',
+    tableAlignV: ['middle', 'top', 'bottom'].includes(rsNext.tableAlignV)
+      ? rsNext.tableAlignV
+      : 'middle',
+    pageVerticalAlign: ['top', 'center'].includes(rsNext.pageVerticalAlign)
+      ? rsNext.pageVerticalAlign
+      : 'top',
+    sheetStageBlockRows: clampInt(rsNext.sheetStageBlockRows, 16, 40, 16),
+    pdfMaxDatesPerBlock: clampInt(rsNext.pdfMaxDatesPerBlock, 8, 31, 16),
+    monthDaysCount: ['auto', '30', '31'].includes(String(rsNext.monthDaysCount))
+      ? String(rsNext.monthDaysCount)
+      : 'auto',
+    targetPercentageColumn: sanitizeTargetColumnSetting(rsNext.targetPercentageColumn),
+  };
 
   await writeSettingJson('system_settings_config', next, updatedBy);
 

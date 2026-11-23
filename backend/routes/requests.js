@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const express = require('express');
 const db = require('../database/init');
 const {
@@ -34,19 +35,6 @@ const DEFAULT_FALLBACK_STAGES = [
   'مراجعه',
   'أخرى',
 ];
-
-const DEFAULT_MODULE_CONFIG = {
-  decisionRoles: ['system_creator', 'admin'],
-  allowSupervisorDecision: false,
-  requireDecisionReason: false,
-  allowEmployeeCancellation: true,
-  allowReopenDecision: true,
-  preventDuplicatePending: false,
-  enforceAdvanceWindow: false,
-  advanceWindowStartDay: 10,
-  advanceWindowEndDay: 20,
-  maxAttachmentSizeMb: 5,
-};
 
 const REQUEST_CATALOG = {
   exam_leave: {
@@ -1138,7 +1126,7 @@ router.post('/', requireAuth, async (req, res) => {
   const sanitizedFormData = sanitizeFormData(requestType, formData);
 
   const monthTag = new Date().toISOString().slice(0, 7).replace('-', '');
-  const tempNumber = `REQ-${monthTag}-${Math.floor(100000 + Math.random() * 899999)}`;
+  const tempNumber = `REQ-${monthTag}-${crypto.randomInt(100000, 1000000)}`;
 
   const created = await db
     .prepare(

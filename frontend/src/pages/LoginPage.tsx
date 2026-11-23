@@ -350,7 +350,7 @@ export function LoginPage() {
       </div>
 
       {/* Left Column in RTL: Architectural Corporate Backdrop + Showcase Card */}
-      <div className="hidden lg:block relative overflow-hidden bg-gradient-to-br from-slate-900 via-[#061830] to-zinc-950">
+      <div className="hidden lg:block relative overflow-hidden bg-gradient-to-br from-slate-100 via-slate-200 to-slate-300 dark:from-slate-900 dark:via-[#061830] dark:to-zinc-950">
         <img
           src="/login-bg.jpg?v=2"
           alt="المقر المؤسسي لمنصة IEMS"
@@ -360,58 +360,64 @@ export function LoginPage() {
           }}
           className="absolute inset-0 h-full w-full object-cover"
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/35 to-black/20" />
+        <div className="absolute inset-0 bg-gradient-to-t from-slate-900/55 via-slate-900/20 to-transparent dark:from-black/90 dark:via-black/35 dark:to-black/20" />
 
         {/* Bottom Floating Card: IEMS Enterprise Overview */}
-        <div className="absolute bottom-8 inset-x-8 z-10 mx-auto max-w-[490px] rounded-2xl border border-white/15 bg-[#0A0B0F]/90 backdrop-blur-md p-6 text-white shadow-2xl">
+        <div className="absolute bottom-8 inset-x-8 z-10 mx-auto max-w-[490px] rounded-2xl border border-slate-200/90 dark:border-white/15 bg-white/95 dark:bg-[#0A0B0F]/90 backdrop-blur-md p-6 text-slate-900 dark:text-white shadow-2xl">
           <div className="flex items-center justify-between gap-3">
-            <span className="text-xs font-bold text-blue-400">
+            <span className="text-xs font-bold text-[#065BAB] dark:text-blue-400">
               منصة إدارة الموارد والأداء · IEMS
             </span>
             <img
-              src="/iems-logo-dark.png?v=3"
+              src={theme === 'dark' ? '/iems-logo-dark.png?v=3' : '/iems-logo.png?v=3'}
               alt="IEMS"
               className="h-7 w-auto object-contain opacity-95"
             />
           </div>
-          <h2 className="mt-2 text-xl font-extrabold tracking-tight text-white">
+          <h2 className="mt-2 text-xl font-extrabold tracking-tight text-slate-900 dark:text-white">
             رؤية موحدة للحضور والأداء المؤسسي
           </h2>
 
-          <div className="my-4 border-t border-white/10" />
+          <div className="my-4 border-t border-slate-200 dark:border-white/10" />
 
           <div className="space-y-3.5">
             <div className="flex items-center gap-3.5">
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-blue-500/30 bg-blue-500/15 text-blue-400">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-[#065BAB] dark:border-blue-500/30 dark:bg-blue-500/15 dark:text-blue-400">
                 <TrendingUp className="h-4 w-4" />
               </span>
               <div className="min-w-0">
-                <div className="text-sm font-bold text-white">مؤشرات الأداء والتارجت اليومي</div>
-                <div className="text-xs text-zinc-400">
+                <div className="text-sm font-bold text-slate-900 dark:text-white">
+                  مؤشرات الأداء والتارجت اليومي
+                </div>
+                <div className="text-xs text-slate-600 dark:text-zinc-400">
                   متابعة دقيقة لنسب التحقق والمراحل الإنتاجية عبر جميع الشيفتات
                 </div>
               </div>
             </div>
 
             <div className="flex items-center gap-3.5">
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-amber-500/30 bg-amber-500/15 text-amber-400">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-amber-200 bg-amber-50 text-amber-600 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-400">
                 <Award className="h-4 w-4" />
               </span>
               <div className="min-w-0">
-                <div className="text-sm font-bold text-white">تصنيف Top 5 والتقارير المعتمدة</div>
-                <div className="text-xs text-zinc-400">
+                <div className="text-sm font-bold text-slate-900 dark:text-white">
+                  تصنيف Top 5 والتقارير المعتمدة
+                </div>
+                <div className="text-xs text-slate-600 dark:text-zinc-400">
                   تقارير تفصيلية جاهزة للطباعة وتصدير PDF و Excel وفق المعايير الرسمية
                 </div>
               </div>
             </div>
 
             <div className="flex items-center gap-3.5">
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-emerald-500/30 bg-emerald-500/15 text-emerald-400">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-400">
                 <Sparkles className="h-4 w-4" />
               </span>
               <div className="min-w-0">
-                <div className="text-sm font-bold text-white">سجلات الحضور والانضباط الشاملة</div>
-                <div className="text-xs text-zinc-400">
+                <div className="text-sm font-bold text-slate-900 dark:text-white">
+                  سجلات الحضور والانضباط الشاملة
+                </div>
+                <div className="text-xs text-slate-600 dark:text-zinc-400">
                   تحليل يومي ومقارنات مباشرة للحضور والغياب والإجازات في منصة واحدة
                 </div>
               </div>

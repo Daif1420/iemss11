@@ -670,7 +670,7 @@ function parseFlexibleDate(value) {
   if (value === null || value === undefined || value === '') return null;
   if (typeof value === 'number') return excelSerialToDate(value);
   const text = String(value).trim();
-  const m = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  const m = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
   if (m) {
     let [, d, mo, y] = m;
     if (y.length === 2) y = `20${y}`;
@@ -733,7 +733,6 @@ function parseSupervisorTargetSheet(rows, sheetLabel) {
   snCols.forEach((snCol, idx) => {
     const nextSn = snCols[idx + 1] ?? Infinity;
     const dateCol = snCol - 2;
-    const dayCol = snCol - 1;
     const section = cleanText(titleRow[snCol]) || `${sheetLabel} ${idx + 1}`;
 
     // Find target-daily / target-monthly columns to the right of snCol,
@@ -855,9 +854,69 @@ function extractEmployeeIdentities(rows) {
 }
 
 /**
+ * Parse a Master header cell into a YYYY-MM-DD date string.
+ * Restricts numeric Excel serials to realistic workbook dates (1982–2119)
+ * so summary integers (like 0 or counts) aren't misread as 1899 dates.
+ */
+function parseMasterHeaderDate(raw) {
+  if (raw === null || raw === undefined || raw === '') return null;
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw) || raw < 30000 || raw > 80000) return null;
+    return excelSerialToDate(raw);
+  }
+  const text = cleanText(raw);
+  if (!text) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const flex = parseFlexibleDate(text);
+  if (flex && /^\d{4}-\d{2}-\d{2}$/.test(flex)) {
+    const year = Number(flex.slice(0, 4));
+    if (year >= 1982 && year <= 2119) return flex;
+  }
+  return null;
+}
+
+/**
+ * Determine whether a daily stage/attendance cell represents real activity.
+ * Blank cells, dashes, and numeric zeros (0, '0', '0%', '0.0') are NOT active.
+ * Positive/negative numbers and attendance codes (ع، ا، أ، ب، م، ن) ARE active.
+ * Note: An individual employee's `0` in الحضور IS still imported on days where
+ * at least one cell anywhere in the sheet has real activity (so `غير مصنف`
+ * works on active working days while completely zero/future days are hidden).
+ */
+function isActiveDailyCellValue(value) {
+  if (value === null || value === undefined || value === '') return false;
+  if (typeof value === 'boolean') return false;
+  if (typeof value === 'number') return Number.isFinite(value) && value !== 0;
+  const text = String(value).trim();
+  if (!text || text === '-' || text === '—') return false;
+  const normalized = text
+    .replace(/[٠-٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+    .replace(/٫/g, '.')
+    .replace(/,/g, '')
+    .replace(/%$/, '')
+    .trim();
+  if (!normalized) return false;
+  const n = Number(normalized);
+  if (Number.isFinite(n)) return n !== 0;
+  return true;
+}
+
+/**
  * Parse Master workbook
  */
-function parseMasterWorkbook(buffer) {
+function parseMasterWorkbook(buffer, options = {}) {
+  const stageBlockRows = Math.min(
+    40,
+    Math.max(16, Math.round(Number(options.employeeBlockRows) || 16))
+  );
+  const monthDaysMode = ['30', '31', 'auto'].includes(String(options.monthDaysCount))
+    ? String(options.monthDaysCount)
+    : 'auto';
+  const maxDateCols = monthDaysMode === '30' ? 30 : 31;
+  const maxDateColIndex = 9 + maxDateCols - 1; // 38 for 30 days (I:AL), 39 for 31 days (I:AM)
+  const targetColOpt = String(options.targetPercentageColumn || 'auto').trim().toUpperCase();
+  const manualTargetCol = /^[A-Z]{1,2}$/.test(targetColOpt) ? colToNumber(targetColOpt) : null;
+
   const files =
     parseZip(buffer);
 
@@ -984,170 +1043,242 @@ function parseMasterWorkbook(buffer) {
    * G  = Shift
    * H  = Stage / Attendance
    *
-   * I:AM = Daily dates
+   * I:AM (or I:AL for 30d, I:AJ/AK for 28/29d) = Daily dates
    *
-   * AN = Total Achievement
-   * AO = Total Target
-   * AP = Percentage
-   * AQ = Bonus Tier
-   * AR = Unauthorized Absence
-   * AS = Total Absence
-   * AT = Work Nature Allowance
-   * AU = Department
+   * Dynamically immediately after the date range:
+   * +0 = Total Achievement (e.g. AN on 31d, AM on 30d)
+   * +1 = Total Target / Stage Target Formula (e.g. AO on 31d, AN on 30d)
+   * +2 = Percentage (e.g. AP on 31d, AO on 30d)
+   * +3 = Bonus Tier
+   * +4 = Unauthorized Absence
+   * +5 = Total Absence
+   * +6 = Work Nature Allowance
+   * +7 = Department
    */
 
-  const header =
-    rows.get(1) || {};
-
-  const dateCols = [];
-
-  // I:AM
-  for (
-    let col = 9;
-    col <= 39;
-    col++
-  ) {
-    const raw =
-      header[col];
-
-    const date =
-      typeof raw === 'number'
-        ? excelSerialToDate(raw)
-        : cleanText(raw);
-
-    if (
-      date &&
-      /^\d{4}-\d{2}-\d{2}$/.test(
-        date
-      )
-    ) {
-      dateCols.push({
-        col,
-        date
-      });
+  let headerRowNum = 1;
+  let allDateCols = [];
+  for (const candidateRowNum of [1, 2, 3]) {
+    const candidateHeader = rows.get(candidateRowNum) || {};
+    const foundCols = [];
+    for (let col = 9; col <= maxDateColIndex; col++) {
+      const date = parseMasterHeaderDate(candidateHeader[col]);
+      if (date) {
+        foundCols.push({ col, date });
+      }
+    }
+    if (foundCols.length) {
+      headerRowNum = candidateRowNum;
+      allDateCols = foundCols;
+      break;
     }
   }
 
-  if (!dateCols.length) {
+  if (!allDateCols.length) {
     throw new Error(
       'لم يتم العثور على تواريخ I:AM في الصف الأول من Master.'
     );
   }
 
-  const employees = [];
+  const lastHeaderDateCol = allDateCols[allDateCols.length - 1].col;
 
-  let tempId = 900000;
+  const sortedRows = [...rows.entries()].sort((a, b) => a[0] - b[0]);
 
-  const sortedRows =
-    [...rows.entries()]
-      .sort(
-        (a, b) =>
-          a[0] - b[0]
-      );
+  // Pre-collect employee blocks so we can:
+  // 1) Filter out unworked/future all-zero date columns across the sheet, and
+  // 2) Dynamically locate summary & target-percentage columns even if 30 vs 31 days differ.
+  const employeeBlocks = [];
+  for (const [rowNum, cells] of sortedRows) {
+    const stage = normalizeStage(cells[8]);
+    const name = cleanText(cells[2]);
+    if (stage !== 'الحضور' || !name) continue;
 
-  for (
-    const [rowNum, cells] of
-      sortedRows
-  ) {
-    const stage =
-      normalizeStage(
-        cells[8]
-      );
+    const blockStageRows = [];
+    for (let r = rowNum; r <= rowNum + stageBlockRows; r++) {
+      const row = rows.get(r);
+      if (!row) continue;
+      const stageName = normalizeStage(row[8]);
+      if (r > rowNum && stageName === 'الحضور' && cleanText(row[2])) {
+        break;
+      }
+      if (!stageName) continue;
+      blockStageRows.push({ r, row, stageName });
+    }
+    employeeBlocks.push({ rowNum, cells, name, blockStageRows });
+  }
 
-    const name =
-      cleanText(
-        cells[2]
-      );
+  if (!employeeBlocks.length) {
+    throw new Error(
+      'لم يتم العثور على أي موظفين في Sheet Master. تأكد أن صف بداية كل موظف يحتوي على "الحضور" في العمود H.'
+    );
+  }
 
-    /**
-     * Employee block starts from
-     * the row where H = الحضور
-     */
-    if (
-      stage !== 'الحضور' ||
-      !name
-    ) {
-      continue;
+  // 1) Identify date columns with real activity ("يعرض لحد م انا واقف / إخفاء أيام الأصفار")
+  const activeDateColSet = new Set();
+  for (const block of employeeBlocks) {
+    for (const { row, stageName } of block.blockStageRows) {
+      if (stageName.toUpperCase() === 'TOTAL TARGET %') continue;
+      for (const { col } of allDateCols) {
+        if (!activeDateColSet.has(col) && isActiveDailyCellValue(row[col])) {
+          activeDateColSet.add(col);
+        }
+      }
+    }
+  }
+
+  const dateCols = allDateCols.filter((d) => activeDateColSet.has(d.col));
+  if (!dateCols.length) {
+    throw new Error(
+      'لم يتم العثور على أي أيام تحتوي على بيانات تشغيلية أو حضور فعلي داخل Master (كل التواريخ فارغة أو قيمتها صفر).'
+    );
+  }
+
+  // 2) Probe summary & target percentage columns after lastHeaderDateCol
+  const probeStart = lastHeaderDateCol + 1;
+  const probeEnd = Math.max(lastHeaderDateCol + 8, (manualTargetCol || 0) + 4);
+  const colStats = new Map();
+
+  for (let c = probeStart; c <= probeEnd; c++) {
+    let divFormulaCount = 0;
+    let sumFormulaCount = 0;
+    let nonEmptyCount = 0;
+
+    for (const block of employeeBlocks) {
+      for (const { row, stageName } of block.blockStageRows) {
+        if (stageName.toUpperCase() === 'TOTAL TARGET %') continue;
+        const val = row[c];
+        if (val !== null && val !== undefined && val !== '') {
+          nonEmptyCount++;
+        }
+        const formula = row.__formulas?.[c];
+        if (formula) {
+          const fStr = String(formula);
+          if (/\bSUM\s*\(/i.test(fStr)) {
+            sumFormulaCount++;
+          }
+          if (stageName !== 'الحضور' && fStr.includes('/') && extractMonthlyTarget(fStr, val, rows) !== null) {
+            divFormulaCount++;
+          }
+        }
+      }
     }
 
-    let id =
-      normalizeId(
-        cells[3]
-      );
+    const headerTexts = [
+      rows.get(headerRowNum)?.[c],
+      rows.get(headerRowNum + 1)?.[c],
+      headerRowNum > 1 ? rows.get(headerRowNum - 1)?.[c] : null,
+    ]
+      .map(normalizeHeader)
+      .filter(Boolean);
 
-    const generatedId =
-      id === null ||
-      id === 0;
+    colStats.set(c, {
+      col: c,
+      divFormulaCount,
+      sumFormulaCount,
+      nonEmptyCount,
+      headerTexts,
+    });
+  }
 
+  let bestTargetFormulaCol = null;
+  let bestTargetFormulaCount = 0;
+  let bestSumCol = null;
+  let bestSumCount = 0;
+  let firstNonEmptyCol = null;
+
+  for (let c = probeStart; c <= probeEnd; c++) {
+    const st = colStats.get(c);
+    if (!st) continue;
+    if (st.divFormulaCount > bestTargetFormulaCount) {
+      bestTargetFormulaCount = st.divFormulaCount;
+      bestTargetFormulaCol = c;
+    }
+    if (st.sumFormulaCount > bestSumCount && st.divFormulaCount === 0) {
+      bestSumCount = st.sumFormulaCount;
+      bestSumCol = c;
+    }
+    if (firstNonEmptyCol === null && st.nonEmptyCount > 0) {
+      firstNonEmptyCol = c;
+    }
+  }
+
+  let summaryStartCol;
+  let targetColIdx;
+  let pctColIdx;
+
+  if (manualTargetCol !== null && manualTargetCol >= probeStart) {
+    const manualStats = colStats.get(manualTargetCol);
+    const prevStats = colStats.get(manualTargetCol - 1);
+    if (
+      (manualStats && manualStats.divFormulaCount > 0) ||
+      !(prevStats && prevStats.divFormulaCount > 0)
+    ) {
+      targetColIdx = manualTargetCol;
+      summaryStartCol = Math.max(probeStart, targetColIdx - 1);
+      pctColIdx = targetColIdx + 1;
+    } else {
+      // Admin pointed to the summary Percentage column immediately after stage target column
+      pctColIdx = manualTargetCol;
+      targetColIdx = manualTargetCol - 1;
+      summaryStartCol = Math.max(probeStart, targetColIdx - 1);
+    }
+  } else if (bestTargetFormulaCol !== null) {
+    targetColIdx = bestTargetFormulaCol;
+    summaryStartCol = Math.max(probeStart, targetColIdx - 1);
+    pctColIdx = targetColIdx + 1;
+  } else {
+    summaryStartCol = bestSumCol ?? firstNonEmptyCol ?? probeStart;
+    targetColIdx = summaryStartCol + 1;
+    pctColIdx = summaryStartCol + 2;
+  }
+
+  const bonusColIdx = pctColIdx + 1;
+  const unauthAbsColIdx = pctColIdx + 2;
+  const totalAbsColIdx = pctColIdx + 3;
+  const allowanceColIdx = pctColIdx + 4;
+  const departmentColIdx = pctColIdx + 5;
+
+  const employees = [];
+  let tempId = 900000;
+
+  for (const block of employeeBlocks) {
+    const { cells, name, blockStageRows } = block;
+
+    let id = normalizeId(cells[3]);
+    const generatedId = id === null || id === 0;
     if (generatedId) {
       id = tempId++;
+    }
+
+    let summaryPct = cells[pctColIdx] ?? null;
+    if (
+      (summaryPct === null || summaryPct === undefined || summaryPct === '') &&
+      manualTargetCol !== null &&
+      typeof cells[manualTargetCol] === 'number'
+    ) {
+      summaryPct = cells[manualTargetCol];
     }
 
     const employee = {
       id,
       generatedId,
-
-      emp_num:
-        normalizeId(
-          cells[3]
-        ) || id,
-
+      emp_num: normalizeId(cells[3]) || id,
       name,
-
-      education:
-        cleanText(
-          cells[4]
-        ),
-
-      residence:
-        cleanText(
-          cells[5]
-        ),
-
-      company:
-        cleanText(
-          cells[6]
-        ),
-
-      shift:
-        cleanText(
-          cells[7]
-        ),
-
-      department:
-        cleanText(
-          cells[47]
-        ),
-
+      education: cleanText(cells[4]),
+      residence: cleanText(cells[5]),
+      company: cleanText(cells[6]),
+      shift: cleanText(cells[7]),
+      department: cleanText(cells[departmentColIdx]),
       stages: [],
-
       summary: {
-        total_achievement:
-          cells[40] ?? null,
-
-        total_target:
-          cells[41] ?? null,
-
-        percentage:
-          cells[42] ?? null,
-
-        bonus_tier:
-          cells[43] ?? null,
-
-        unauthorized_absence:
-          cells[44] ?? null,
-
-        total_absence:
-          cells[45] ?? null,
-
-        work_nature_allowance:
-          cells[46] ?? null,
-
-        department:
-          cleanText(
-            cells[47]
-          ),
-
+        total_achievement: cells[summaryStartCol] ?? null,
+        total_target: cells[targetColIdx] ?? null,
+        percentage: summaryPct,
+        bonus_tier: cells[bonusColIdx] ?? null,
+        unauthorized_absence: cells[unauthAbsColIdx] ?? null,
+        total_absence: cells[totalAbsColIdx] ?? null,
+        work_nature_allowance: cells[allowanceColIdx] ?? null,
+        department: cleanText(cells[departmentColIdx]),
         monthly_target: null,
         total_present_days: null,
         total_absence_days: null,
@@ -1182,54 +1313,43 @@ function parseMasterWorkbook(buffer) {
       }
     }
 
-    /**
-     * Each employee occupies
-     * 17 rows.
-     */
-    for (
-      let r = rowNum;
-      r <= rowNum + 16;
-      r++
-    ) {
-      const row =
-        rows.get(r);
-
-      if (!row) continue;
-
-      const stageName =
-        normalizeStage(
-          row[8]
-        );
-
-      if (!stageName) {
-        continue;
-      }
-
+    for (const { row, stageName } of blockStageRows) {
       const daily = {};
 
-      for (
-        const { col, date } of
-          dateCols
-      ) {
-        const value =
-          row[col];
-
+      for (const { col, date } of dateCols) {
+        const value = row[col];
         if (
           value !== null &&
           value !== undefined &&
           value !== ''
         ) {
-          daily[date] =
-            value;
+          daily[date] = value;
         }
       }
 
-      const monthlyTargetFormula = stageName === 'الحضور'
+      const isAttOrTotal = stageName === 'الحضور' || stageName.toUpperCase() === 'TOTAL TARGET %';
+      let monthlyTargetFormula = isAttOrTotal ? null : (row.__formulas?.[targetColIdx] || null);
+      let monthlyTarget = isAttOrTotal
         ? null
-        : row.__formulas?.[41] || null;
-      const monthlyTarget = stageName === 'الحضور'
-        ? null
-        : extractMonthlyTarget(monthlyTargetFormula, row[41], rows);
+        : extractMonthlyTarget(monthlyTargetFormula, row[targetColIdx], rows);
+
+      // In auto mode, if the primary target column lacks a formula on this specific row,
+      // check adjacent summary columns strictly for explicit division formulas.
+      if (!isAttOrTotal && monthlyTarget === null && manualTargetCol === null) {
+        for (const altCol of [targetColIdx + 1, targetColIdx - 1]) {
+          if (altCol < probeStart) continue;
+          const altFormula = row.__formulas?.[altCol];
+          if (altFormula && String(altFormula).includes('/')) {
+            const altTarget = extractMonthlyTarget(altFormula, null, rows);
+            if (altTarget !== null) {
+              monthlyTargetFormula = altFormula;
+              monthlyTarget = altTarget;
+              break;
+            }
+          }
+        }
+      }
+
       employee.stages.push({
         role: stageName,
         daily,
@@ -1238,15 +1358,7 @@ function parseMasterWorkbook(buffer) {
       });
     }
 
-    employees.push(
-      employee
-    );
-  }
-
-  if (!employees.length) {
-    throw new Error(
-      'لم يتم العثور على أي موظفين في Sheet Master. تأكد أن صف بداية كل موظف يحتوي على "الحضور" في العمود H.'
-    );
+    employees.push(employee);
   }
 
   const supervisorTargets = parseSupervisorTargets(files, sharedStrings, workbookXml, rels);
@@ -1262,10 +1374,7 @@ function parseMasterWorkbook(buffer) {
 
   return {
     employees,
-    dates:
-      dateCols.map(
-        item => item.date
-      ),
+    dates: dateCols.map(item => item.date),
     supervisorTargets,
     leavers
   };

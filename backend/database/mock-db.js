@@ -135,12 +135,14 @@ function attendanceFlags(row) {
   const num = row.value_num;
   const txt = String(row.value_text || '').trim();
   const isPresent = num === 0.5 || num === 1 || num === 1.5;
-  const isCasual = num !== null && num !== undefined && num === 0;
-  const isPermission = txt === 'ا';
+  const isCasual = txt === 'ع';
+  const isPermission = txt === 'ا' || txt === 'أ';
   const isUnauthorized = txt === 'ب';
   const isMedical = txt === 'م';
-  const isAbsent = isCasual || isPermission || isUnauthorized || isMedical;
-  return { isPresent, isCasual, isPermission, isUnauthorized, isMedical, isAbsent };
+  const isExam = txt === 'ن';
+  const isUnclassified = (num !== null && num !== undefined && num === 0) || txt === '0';
+  const isAbsent = isCasual || isPermission || isUnauthorized || isMedical || isExam || isUnclassified;
+  return { isPresent, isCasual, isPermission, isUnauthorized, isMedical, isExam, isUnclassified, isAbsent };
 }
 
 function filterEmployeesWhere(sql, params, empList) {
@@ -261,10 +263,12 @@ function filterStageDailyWithEmployees(sql, params) {
     if (statusChunkMatch && /value_num|value_text/i.test(statusChunkMatch[1])) {
       const chunk = statusChunkMatch[1];
       if (/0\.5,1,1\.5/.test(chunk)) statusConds.push('present');
-      if (/value_num=0/.test(chunk)) statusConds.push('casual');
-      if (/='ا'/.test(chunk)) statusConds.push('permission');
+      if (/='ع'/.test(chunk)) statusConds.push('casual');
+      if (/IN\s*\('ا'\s*,\s*'أ'\)|='ا'/.test(chunk)) statusConds.push('permission');
       if (/='ب'/.test(chunk)) statusConds.push('unauthorized');
       if (/='م'/.test(chunk)) statusConds.push('medical');
+      if (/='ن'/.test(chunk)) statusConds.push('exam');
+      if (/value_num=0|='0'/.test(chunk)) statusConds.push('unclassified');
     }
   }
   if (statusConds.length) {
@@ -275,7 +279,9 @@ function filterStageDailyWithEmployees(sql, params) {
         (statusConds.includes('casual') && f.isCasual) ||
         (statusConds.includes('permission') && f.isPermission) ||
         (statusConds.includes('unauthorized') && f.isUnauthorized) ||
-        (statusConds.includes('medical') && f.isMedical)
+        (statusConds.includes('medical') && f.isMedical) ||
+        (statusConds.includes('exam') && f.isExam) ||
+        (statusConds.includes('unclassified') && f.isUnclassified)
       );
     });
   }
@@ -474,15 +480,16 @@ async function query(rawSql, params = []) {
     }
 
     // dashboard attendance summary
-    if (/as present_days, count\(case when sd\.value_num = 0/i.test(sql)) {
+    if (/as present_days,\s*count\(/i.test(sql) && /as absent_days/i.test(sql)) {
       let present_days = 0, absent_days = 0;
       const distinctPresent = new Set();
       for (const { sd } of joined) {
-        if (sd.value_num === 0.5 || sd.value_num === 1 || sd.value_num === 1.5) {
+        const f = attendanceFlags(sd);
+        if (f.isPresent) {
           present_days += sd.value_num;
           distinctPresent.add(`${sd.employee_id}:${sd.entry_date}`);
         }
-        if (sd.value_num === 0) absent_days += 1;
+        if (f.isAbsent) absent_days += 1;
       }
       return {
         rows: [{
@@ -529,7 +536,7 @@ async function query(rawSql, params = []) {
 
     // attendance totals
     if (/select count\(\*\) total,sum\(/i.test(sql)) {
-      let present = 0, absent = 0, casual = 0, permission = 0, unauthorized = 0, medical = 0;
+      let present = 0, absent = 0, casual = 0, permission = 0, unauthorized = 0, medical = 0, exam = 0, unclassified = 0;
       for (const { sd } of joined) {
         const f = attendanceFlags(sd);
         if (f.isPresent) present += sd.value_num;
@@ -538,8 +545,10 @@ async function query(rawSql, params = []) {
         if (f.isPermission) permission += 1;
         if (f.isUnauthorized) unauthorized += 1;
         if (f.isMedical) medical += 1;
+        if (f.isExam) exam += 1;
+        if (f.isUnclassified) unclassified += 1;
       }
-      return { rows: [{ total: joined.length, present, absent, casual, permission, unauthorized, medical }], rowCount: 1 };
+      return { rows: [{ total: joined.length, present, absent, casual, permission, unauthorized, medical, exam, unclassified }], rowCount: 1 };
     }
 
     // attendance companies breakdown
@@ -551,7 +560,7 @@ async function query(rawSql, params = []) {
           map.set(name, {
             name, total: 0, present: 0, absent: 0,
             graduate_present: 0, graduate_absent: 0, student_present: 0, student_absent: 0,
-            casual: 0, permission: 0, unauthorized: 0, medical: 0,
+            casual: 0, permission: 0, unauthorized: 0, medical: 0, exam: 0, unclassified: 0,
           });
         }
         const r = map.get(name);
@@ -563,13 +572,15 @@ async function query(rawSql, params = []) {
         if (f.isPermission) r.permission += 1;
         if (f.isUnauthorized) r.unauthorized += 1;
         if (f.isMedical) r.medical += 1;
+        if (f.isExam) r.exam += 1;
+        if (f.isUnclassified) r.unclassified += 1;
         if (e.education === 'خريج') {
           if (f.isPresent) r.graduate_present += sd.value_num;
-          else r.graduate_absent += 1;
+          else if (f.isAbsent) r.graduate_absent += 1;
         }
         if (e.education === 'طالب') {
           if (f.isPresent) r.student_present += sd.value_num;
-          else r.student_absent += 1;
+          else if (f.isAbsent) r.student_absent += 1;
         }
       }
       const rows = [...map.values()].sort((a, b) => b.total - a.total);
@@ -587,7 +598,7 @@ async function query(rawSql, params = []) {
         const r = map.get(k);
         const f = attendanceFlags(sd);
         if (f.isPresent) r.present += sd.value_num;
-        else r.absent += 1;
+        else if (f.isAbsent) r.absent += 1;
       }
       const rows = [...map.values()];
       return { rows, rowCount: rows.length };
@@ -598,7 +609,7 @@ async function query(rawSql, params = []) {
       const map = new Map();
       for (const { sd } of joined) {
         if (!map.has(sd.entry_date)) {
-          map.set(sd.entry_date, { date: sd.entry_date, total: 0, present: 0, absent: 0, casual: 0, permission: 0, unauthorized: 0, medical: 0 });
+          map.set(sd.entry_date, { date: sd.entry_date, total: 0, present: 0, absent: 0, casual: 0, permission: 0, unauthorized: 0, medical: 0, exam: 0, unclassified: 0 });
         }
         const r = map.get(sd.entry_date);
         const f = attendanceFlags(sd);
@@ -609,6 +620,8 @@ async function query(rawSql, params = []) {
         if (f.isPermission) r.permission += 1;
         if (f.isUnauthorized) r.unauthorized += 1;
         if (f.isMedical) r.medical += 1;
+        if (f.isExam) r.exam += 1;
+        if (f.isUnclassified) r.unclassified += 1;
       }
       const rows = [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
       return { rows, rowCount: rows.length };
@@ -623,7 +636,7 @@ async function query(rawSql, params = []) {
           const es = sumById.get(e.id);
           map.set(e.id, {
             id: e.id, name: e.name, company: e.company, shift: e.shift, department: e.department,
-            present: 0, absent: 0, casual: 0, permission: 0, unauthorized: 0, medical: 0,
+            present: 0, absent: 0, casual: 0, permission: 0, unauthorized: 0, medical: 0, exam: 0, unclassified: 0,
             master_present_value: es ? es.total_present_days : null, attendance_days: 0,
           });
         }
@@ -636,6 +649,8 @@ async function query(rawSql, params = []) {
         if (f.isPermission) r.permission += 1;
         if (f.isUnauthorized) r.unauthorized += 1;
         if (f.isMedical) r.medical += 1;
+        if (f.isExam) r.exam += 1;
+        if (f.isUnclassified) r.unclassified += 1;
       }
       const rows = [...map.values()].sort((a, b) => b.absent - a.absent || String(a.name).localeCompare(String(b.name), 'ar'));
       return { rows, rowCount: rows.length };
@@ -709,7 +724,7 @@ async function query(rawSql, params = []) {
     let items = store.stage_daily.filter((d) => d.employee_id === empId && d.stage === 'الحضور');
     if (/entry_date >= \$/i.test(sql)) { const v = params[idx++]; items = items.filter((d) => d.entry_date >= v); }
     if (/entry_date <= \$/i.test(sql)) { const v = params[idx++]; items = items.filter((d) => d.entry_date <= v); }
-    let present_days = 0, casual_leave = 0, leave_with_permission = 0, leave_without_permission = 0, sick_leave = 0;
+    let present_days = 0, casual_leave = 0, leave_with_permission = 0, leave_without_permission = 0, sick_leave = 0, exam_leave = 0, unclassified_absence = 0;
     for (const d of items) {
       const f = attendanceFlags(d);
       if (f.isPresent) present_days += d.value_num;
@@ -717,8 +732,10 @@ async function query(rawSql, params = []) {
       if (f.isPermission) leave_with_permission += 1;
       if (f.isUnauthorized) leave_without_permission += 1;
       if (f.isMedical) sick_leave += 1;
+      if (f.isExam) exam_leave += 1;
+      if (f.isUnclassified) unclassified_absence += 1;
     }
-    return { rows: [{ present_days, casual_leave, leave_with_permission, leave_without_permission, sick_leave }], rowCount: 1 };
+    return { rows: [{ present_days, casual_leave, leave_with_permission, leave_without_permission, sick_leave, exam_leave, unclassified_absence }], rowCount: 1 };
   }
   if (/select coalesce\(sum\(value_num\),0\) t from stage_daily where employee_id = \$1/i.test(sql)) {
     const empId = Number(params[0]);

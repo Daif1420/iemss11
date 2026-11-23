@@ -11,6 +11,7 @@ import {
   Home,
   KeyRound,
   LogOut,
+  Menu,
   Moon,
   Palette,
   PenSquare,
@@ -23,6 +24,7 @@ import {
   UserMinus,
   UserPlus,
   Users,
+  X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
@@ -32,6 +34,7 @@ import { ROLE_LABELS, fmtDateTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { NotificationItem } from '@/types/iems';
 import { IemsLogo } from '@/components/shared/IemsLogo';
+import { SeasonalScreenOverlay, SeasonalTopAccent } from '@/components/shared/SeasonalDecor';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -77,6 +80,7 @@ export function AppShell({
   const [notifOpen, setNotifOpen] = useState(false);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   // Unified Account Dropdown + Profile / Password Dialog
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
@@ -88,6 +92,24 @@ export function AppShell({
   const [profileSaving, setProfileSaving] = useState(false);
 
   const currentPath = location.pathname;
+
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [currentPath]);
+
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMobileNavOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [mobileNavOpen]);
 
   const isEmployeesRouteActive = useMemo(
     () =>
@@ -228,162 +250,211 @@ export function AppShell({
 
   const navLinkClass = (active: boolean) =>
     cn(
-      'relative inline-flex h-14 items-center gap-1 sm:gap-1.5 px-1.5 sm:px-2.5 text-[11px] sm:text-[13px] font-bold transition-colors whitespace-nowrap shrink-0',
+      'relative inline-flex h-14 items-center gap-1.5 px-2 xl:px-2.5 text-xs xl:text-[13px] font-bold transition-colors whitespace-nowrap shrink-0',
       active
-        ? 'text-primary after:absolute after:inset-x-1 sm:after:inset-x-1.5 after:bottom-0 after:h-[2.5px] after:rounded-full after:bg-primary'
+        ? 'text-primary after:absolute after:inset-x-1.5 after:bottom-0 after:h-[2.5px] after:rounded-full after:bg-primary'
         : 'text-muted-foreground hover:text-foreground'
     );
 
+  const mobileSubNavLinkClass = (active: boolean) =>
+    cn(
+      'relative inline-flex h-10 w-full items-center justify-center gap-1.5 px-2 text-xs font-bold transition-colors whitespace-nowrap shrink-0',
+      active
+        ? 'text-primary after:absolute after:inset-x-3 after:bottom-0 after:h-[2.5px] after:rounded-full after:bg-primary'
+        : 'text-muted-foreground hover:text-foreground'
+    );
+
+  const mobileDrawerItemClass = (active: boolean) =>
+    cn(
+      'flex min-h-[44px] w-full items-center gap-2.5 rounded-xl border px-3 py-2.5 text-[13px] font-bold transition-colors',
+      active
+        ? 'border-primary/30 bg-primary/10 text-primary'
+        : 'border-transparent bg-secondary/40 text-foreground hover:bg-secondary/80'
+    );
+
   return (
-    <div dir="rtl" className="min-h-screen flex flex-col bg-background text-foreground">
+    <div dir="rtl" className="min-h-screen flex flex-col bg-background text-foreground overflow-x-clip">
+      <SeasonalScreenOverlay />
       {/* Top Navigation Bar */}
-      <header className="sticky top-0 z-40 h-14 w-full border-b border-border bg-card/95 backdrop-blur-md no-print">
+      <header className="sticky top-0 z-40 w-full border-b border-border bg-card/95 backdrop-blur-md no-print">
+        <SeasonalTopAccent />
         <div
           className={cn(
-            'mx-auto flex h-full items-center justify-between gap-2 sm:gap-4 px-2 sm:px-6',
+            'mx-auto flex h-14 items-center justify-between gap-2 sm:gap-4 px-2.5 min-[360px]:px-3 sm:px-6',
             maxWidthClass
           )}
         >
-          {/* Zone 1 (Right / Start in RTL): IEMS Brand */}
-          <div className="flex items-center shrink-0 min-w-0">
+          {/* Zone 1 (Right / Start in RTL): Mobile Menu Toggle + IEMS Brand */}
+          <div className="flex items-center gap-1.5 min-[420px]:gap-2 sm:gap-2.5 shrink-0 min-w-0">
+            {!isEmployee && isSupervisorUp && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => setMobileNavOpen((prev) => !prev)}
+                className={cn(
+                  'lg:hidden h-8 w-8 min-[360px]:h-9 min-[360px]:w-9 rounded-xl border transition-colors shrink-0',
+                  mobileNavOpen
+                    ? 'border-primary/40 bg-primary/10 text-primary'
+                    : 'border-border/70 bg-secondary/40 text-foreground hover:bg-secondary/80'
+                )}
+                aria-label={mobileNavOpen ? 'إغلاق القائمة' : 'فتح القائمة'}
+                aria-expanded={mobileNavOpen}
+              >
+                {mobileNavOpen ? <X className="h-4.5 w-4.5" /> : <Menu className="h-4.5 w-4.5" />}
+              </Button>
+            )}
             <Link
               to="/home.html"
               className="flex items-center shrink-0 focus:outline-none"
               title="IEMS - نظام إدارة الموظفين"
             >
-              <IemsLogo size="md" className="h-6 sm:h-8" />
+              <IemsLogo size="md" className="h-4 min-[360px]:h-5 min-[420px]:h-6 sm:h-7 lg:h-8" />
             </Link>
           </div>
 
-          {/* Zone 2 (Center): Centered Nav Tabs visible across mobile, tablet, and desktop */}
+          {/* Zone 2 (Center): Centered & evenly distributed Nav Tabs on desktop */}
           {!isEmployee && isSupervisorUp ? (
-            <nav className="flex flex-1 items-center justify-start lg:justify-center gap-0.5 sm:gap-1 xl:gap-2 min-w-0 overflow-x-auto no-scrollbar">
-              <Link to="/home.html" className={navLinkClass(isHomeActive)}>
-                <Home className="h-3.5 w-3.5" />
-                <span>الرئيسية</span>
-              </Link>
-
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    className={cn(navLinkClass(isEmployeesRouteActive), 'cursor-pointer')}
-                  >
-                    <Users className="h-3.5 w-3.5" />
-                    <span>الموظفون</span>
-                    <ChevronDown className="h-3.5 w-3.5 opacity-70" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="center" className="w-48">
-                  {EMPLOYEE_SUB_ROUTES.map((item) => {
-                    const Icon = item.icon;
-                    const active = currentPath === item.to;
-                    return (
-                      <DropdownMenuItem
-                        key={item.to}
-                        onSelect={() => navigate(item.to)}
-                        className={cn(active && 'bg-accent text-accent-foreground font-bold')}
-                      >
-                        <Icon className="h-4 w-4" />
-                        <span>{item.label}</span>
-                      </DropdownMenuItem>
-                    );
-                  })}
-                </DropdownMenuContent>
-              </DropdownMenu>
-
-              <Link to="/reports.html" className={navLinkClass(currentPath === '/reports.html')}>
-                <FileBarChart2 className="h-3.5 w-3.5" />
-                <span>التقارير</span>
-              </Link>
-
-              <Link to="/requests.html" className={navLinkClass(currentPath === '/requests.html')}>
-                <FileText className="h-3.5 w-3.5" />
-                <span>الطلبات</span>
-              </Link>
-
-              {isAdminUp && (
-                <Link
-                  to="/admin-manual-entry.html"
-                  className={navLinkClass(currentPath === '/admin-manual-entry.html')}
-                >
-                  <PenSquare className="h-3.5 w-3.5" />
-                  <span>الإدخال اليدوي</span>
-                </Link>
-              )}
-
-              <Link
-                to="/admin-import.html"
-                className={navLinkClass(currentPath === '/admin-import.html')}
+            <nav className="hidden lg:flex flex-1 min-w-0 items-center overflow-x-auto no-scrollbar">
+              <div
+                className={cn(
+                  'mx-auto flex items-center justify-evenly gap-1 xl:gap-2 px-1.5 xl:px-2 min-w-max',
+                  isCreator
+                    ? 'lg:min-w-0 lg:w-full lg:max-w-4xl'
+                    : isAdminUp
+                      ? 'lg:min-w-0 lg:w-full lg:max-w-3xl'
+                      : 'lg:min-w-0 lg:w-full lg:max-w-2xl'
+                )}
               >
-                <FileSpreadsheet className="h-3.5 w-3.5" />
-                <span>تحديث البيانات</span>
-              </Link>
+                <Link to="/home.html" className={navLinkClass(isHomeActive)}>
+                  <Home className="h-3.5 w-3.5" />
+                  <span>الرئيسية</span>
+                </Link>
 
-              {isCreator && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <button
                       type="button"
-                      className={cn(navLinkClass(isSystemRouteActive), 'cursor-pointer')}
+                      className={cn(navLinkClass(isEmployeesRouteActive), 'cursor-pointer')}
                     >
-                      <Settings className="h-3.5 w-3.5" />
-                      <span>إعدادات النظام</span>
+                      <Users className="h-3.5 w-3.5" />
+                      <span>الموظفون</span>
                       <ChevronDown className="h-3.5 w-3.5 opacity-70" />
                     </button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="center" className="w-52">
-                    <DropdownMenuItem
-                      onSelect={() => navigate('/settings.html')}
-                      className={cn(
-                        currentPath === '/settings.html' &&
-                          'bg-accent text-accent-foreground font-bold'
-                      )}
-                    >
-                      <SlidersHorizontal className="h-4 w-4" />
-                      <span>الإعدادات العامة والبيانات</span>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onSelect={() => navigate('/audit-logs.html')}
-                      className={cn(
-                        currentPath === '/audit-logs.html' &&
-                          'bg-accent text-accent-foreground font-bold'
-                      )}
-                    >
-                      <ScrollText className="h-4 w-4" />
-                      <span>سجل العمليات</span>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onSelect={() => navigate('/themes.html')}
-                      className={cn(
-                        currentPath === '/themes.html' &&
-                          'bg-accent text-accent-foreground font-bold'
-                      )}
-                    >
-                      <Palette className="h-4 w-4" />
-                      <span>بانر الصفحة الرئيسية</span>
-                    </DropdownMenuItem>
+                  <DropdownMenuContent align="center" className="w-48">
+                    {EMPLOYEE_SUB_ROUTES.map((item) => {
+                      const Icon = item.icon;
+                      const active = currentPath === item.to;
+                      return (
+                        <DropdownMenuItem
+                          key={item.to}
+                          onSelect={() => navigate(item.to)}
+                          className={cn(active && 'bg-accent text-accent-foreground font-bold')}
+                        >
+                          <Icon className="h-4 w-4" />
+                          <span>{item.label}</span>
+                        </DropdownMenuItem>
+                      );
+                    })}
                   </DropdownMenuContent>
                 </DropdownMenu>
-              )}
+
+                <Link to="/reports.html" className={navLinkClass(currentPath === '/reports.html')}>
+                  <FileBarChart2 className="h-3.5 w-3.5" />
+                  <span>التقارير</span>
+                </Link>
+
+                <Link to="/requests.html" className={navLinkClass(currentPath === '/requests.html')}>
+                  <FileText className="h-3.5 w-3.5" />
+                  <span>الطلبات</span>
+                </Link>
+
+                {isAdminUp && (
+                  <Link
+                    to="/admin-manual-entry.html"
+                    className={navLinkClass(currentPath === '/admin-manual-entry.html')}
+                  >
+                    <PenSquare className="h-3.5 w-3.5" />
+                    <span>الإدخال اليدوي</span>
+                  </Link>
+                )}
+
+                <Link
+                  to="/admin-import.html"
+                  className={navLinkClass(currentPath === '/admin-import.html')}
+                >
+                  <FileSpreadsheet className="h-3.5 w-3.5" />
+                  <span>تحديث البيانات</span>
+                </Link>
+
+                {isCreator && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        className={cn(navLinkClass(isSystemRouteActive), 'cursor-pointer')}
+                      >
+                        <Settings className="h-3.5 w-3.5" />
+                        <span>إعدادات النظام</span>
+                        <ChevronDown className="h-3.5 w-3.5 opacity-70" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="center" className="w-52">
+                      <DropdownMenuItem
+                        onSelect={() => navigate('/settings.html')}
+                        className={cn(
+                          currentPath === '/settings.html' &&
+                            'bg-accent text-accent-foreground font-bold'
+                        )}
+                      >
+                        <SlidersHorizontal className="h-4 w-4" />
+                        <span>الإعدادات العامة والبيانات</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onSelect={() => navigate('/audit-logs.html')}
+                        className={cn(
+                          currentPath === '/audit-logs.html' &&
+                            'bg-accent text-accent-foreground font-bold'
+                        )}
+                      >
+                        <ScrollText className="h-4 w-4" />
+                        <span>سجل العمليات</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onSelect={() => navigate('/themes.html')}
+                        className={cn(
+                          currentPath === '/themes.html' &&
+                            'bg-accent text-accent-foreground font-bold'
+                        )}
+                      >
+                        <Palette className="h-4 w-4" />
+                        <span>بانر الصفحة الرئيسية</span>
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+              </div>
             </nav>
           ) : isEmployee ? (
-            <nav className="flex flex-1 items-center justify-center gap-1 sm:gap-2 min-w-0 overflow-x-auto no-scrollbar">
-              <Link to="/home.html" className={navLinkClass(isHomeActive)}>
-                <Home className="h-3.5 w-3.5" />
-                <span>الرئيسية</span>
-              </Link>
-              <Link to="/requests.html" className={navLinkClass(currentPath === '/requests.html')}>
-                <FileText className="h-3.5 w-3.5" />
-                <span>الطلبات والخدمات</span>
-              </Link>
+            <nav className="hidden sm:flex flex-1 min-w-0 items-center">
+              <div className="mx-auto flex items-center justify-evenly gap-6 px-2 w-full max-w-sm">
+                <Link to="/home.html" className={navLinkClass(isHomeActive)}>
+                  <Home className="h-3.5 w-3.5" />
+                  <span>الرئيسية</span>
+                </Link>
+                <Link to="/requests.html" className={navLinkClass(currentPath === '/requests.html')}>
+                  <FileText className="h-3.5 w-3.5" />
+                  <span>الطلبات والخدمات</span>
+                </Link>
+              </div>
             </nav>
           ) : (
             <div className="flex-1" />
           )}
 
           {/* Zone 3 (Left / End in RTL): Utility Actions + Account + Intercom Brand */}
-          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+          <div className="flex items-center gap-1 min-[420px]:gap-1.5 sm:gap-2 shrink-0">
             {/* Notifications */}
             <Popover
               open={notifOpen}
@@ -396,7 +467,7 @@ export function AppShell({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="relative h-8 w-8 sm:h-9 sm:w-9 rounded-lg"
+                  className="relative h-8 w-8 min-[360px]:h-9 min-[360px]:w-9 rounded-xl"
                   aria-label="الإشعارات"
                 >
                   <Bell className="h-4 w-4 text-muted-foreground" />
@@ -407,7 +478,12 @@ export function AppShell({
                   )}
                 </Button>
               </PopoverTrigger>
-              <PopoverContent align="end" className="w-[min(20rem,calc(100vw-1.5rem))] p-0 overflow-hidden">
+              <PopoverContent
+                align="end"
+                sideOffset={8}
+                collisionPadding={12}
+                className="w-[min(21rem,calc(100vw-1.5rem))] p-0 overflow-hidden"
+              >
                 <div className="flex items-center justify-between border-b border-border px-3.5 py-2.5 bg-muted/40">
                   <span className="text-xs font-bold text-foreground">
                     الإشعارات {unreadCount > 0 ? `(${unreadCount})` : ''}
@@ -470,7 +546,7 @@ export function AppShell({
               variant="ghost"
               size="icon"
               onClick={toggleTheme}
-              className="h-8 w-8 sm:h-9 sm:w-9 rounded-lg"
+              className="h-8 w-8 min-[360px]:h-9 min-[360px]:w-9 rounded-xl"
               aria-label={theme === 'dark' ? 'التبديل للوضع الفاتح' : 'التبديل للوضع الداكن'}
               title={theme === 'dark' ? 'الوضع الفاتح' : 'الوضع الداكن'}
             >
@@ -486,8 +562,9 @@ export function AppShell({
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
+                  aria-label="حساب المستخدم"
                   className={cn(
-                    'inline-flex items-center gap-1.5 sm:gap-2 rounded-xl border bg-secondary/40 hover:bg-secondary/75 px-1.5 py-1 sm:px-2.5 sm:py-1.5 transition-colors cursor-pointer focus:outline-none',
+                    'inline-flex h-8 w-8 min-[360px]:h-9 min-[360px]:w-9 md:h-10 md:w-auto md:px-2.5 items-center justify-center md:justify-start gap-2 rounded-xl border bg-secondary/40 hover:bg-secondary/75 transition-colors cursor-pointer focus:outline-none',
                     accountMenuOpen
                       ? 'border-primary ring-1 ring-primary/35'
                       : 'border-border'
@@ -505,16 +582,18 @@ export function AppShell({
                     </span>
                   </span>
                   {accountMenuOpen ? (
-                    <ChevronUp className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    <ChevronUp className="hidden md:inline-block h-3.5 w-3.5 text-muted-foreground shrink-0" />
                   ) : (
-                    <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    <ChevronDown className="hidden md:inline-block h-3.5 w-3.5 text-muted-foreground shrink-0" />
                   )}
                 </button>
               </DropdownMenuTrigger>
 
               <DropdownMenuContent
                 align="end"
-                className="w-64 p-0 overflow-hidden rounded-xl border-border bg-card dark:bg-[#141417] shadow-xl"
+                sideOffset={8}
+                collisionPadding={12}
+                className="w-[min(16rem,calc(100vw-1.5rem))] p-0 overflow-hidden rounded-xl border-border bg-card dark:bg-[#141417] shadow-xl"
               >
                 <div className="px-4 py-3.5 border-b border-border space-y-1">
                   <div className="text-sm font-extrabold text-foreground truncate">
@@ -560,7 +639,7 @@ export function AppShell({
             </DropdownMenu>
 
             {/* Intercom Partner Logo visible on all viewports */}
-            <span className="inline-block h-5 w-[1px] bg-border mx-0.5" />
+            <span className="hidden min-[380px]:inline-block h-4 sm:h-5 w-[1px] bg-border mx-0.5" />
             <Link
               to="/home.html"
               className="flex items-center shrink-0 focus:outline-none"
@@ -569,12 +648,179 @@ export function AppShell({
               <img
                 src={theme === 'dark' ? '/logo-dark.png' : '/logo.png'}
                 alt="Intercom"
-                className="h-6 sm:h-8 w-auto object-contain"
+                className="h-4 min-[360px]:h-5 min-[420px]:h-6 sm:h-7 lg:h-8 w-auto object-contain"
               />
             </Link>
           </div>
         </div>
+
+        {/* Employee Mobile Sub-Bar (< sm): Two clean centered tabs without crowding Row 1 */}
+        {isEmployee && (
+          <nav
+            aria-label="التنقل الرئيسي"
+            className="sm:hidden border-t border-border/70 bg-card/85 px-3 h-10"
+          >
+            <div className="mx-auto grid h-full w-full max-w-sm grid-cols-2">
+              <Link to="/home.html" className={mobileSubNavLinkClass(isHomeActive)}>
+                <Home className="h-3.5 w-3.5" />
+                <span>الرئيسية</span>
+              </Link>
+              <Link
+                to="/requests.html"
+                className={mobileSubNavLinkClass(currentPath === '/requests.html')}
+              >
+                <FileText className="h-3.5 w-3.5" />
+                <span>الطلبات والخدمات</span>
+              </Link>
+            </div>
+          </nav>
+        )}
       </header>
+
+      {/* Mobile & Tablet Navigation Drawer Overlay for Supervisors / Admins / Creator */}
+      {!isEmployee && isSupervisorUp && mobileNavOpen && (
+        <div className="fixed inset-x-0 top-14 bottom-0 z-30 lg:hidden no-print">
+          <div
+            className="absolute inset-0 bg-background/60 backdrop-blur-xs"
+            onClick={() => setMobileNavOpen(false)}
+            aria-hidden="true"
+          />
+          <nav
+            aria-label="قائمة التنقل"
+            className="relative mx-auto max-h-[calc(100dvh-3.5rem)] overflow-y-auto border-b border-border bg-card shadow-xl"
+          >
+            <div className={cn('mx-auto px-3 sm:px-6 py-4 space-y-4', maxWidthClass)}>
+              {/* Compact User Context Strip on Phones (< md) */}
+              {user && (
+                <div className="flex md:hidden items-center justify-between gap-2 rounded-xl border border-border/70 bg-secondary/40 px-3.5 py-2.5 text-xs">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#065BAB] dark:bg-blue-600 text-white">
+                      <User className="h-3.5 w-3.5" />
+                    </span>
+                    <span className="font-extrabold text-foreground truncate">{user.name}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0 text-muted-foreground">
+                    <span className="font-bold text-primary">{ROLE_LABELS[user.role]}</span>
+                    <span aria-hidden="true">·</span>
+                    <span className="tabular-nums" dir="ltr">
+                      @{user.id}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Primary Links */}
+              <div className="space-y-2">
+                <div className="px-1 text-[11px] font-bold text-muted-foreground">الأقسام الرئيسية</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <Link
+                    to="/home.html"
+                    onClick={() => setMobileNavOpen(false)}
+                    className={mobileDrawerItemClass(isHomeActive)}
+                  >
+                    <Home className="h-4 w-4 shrink-0" />
+                    <span className="truncate">الرئيسية</span>
+                  </Link>
+                  <Link
+                    to="/reports.html"
+                    onClick={() => setMobileNavOpen(false)}
+                    className={mobileDrawerItemClass(currentPath === '/reports.html')}
+                  >
+                    <FileBarChart2 className="h-4 w-4 shrink-0" />
+                    <span className="truncate">التقارير</span>
+                  </Link>
+                  <Link
+                    to="/requests.html"
+                    onClick={() => setMobileNavOpen(false)}
+                    className={mobileDrawerItemClass(currentPath === '/requests.html')}
+                  >
+                    <FileText className="h-4 w-4 shrink-0" />
+                    <span className="truncate">الطلبات</span>
+                  </Link>
+                  {isAdminUp && (
+                    <Link
+                      to="/admin-manual-entry.html"
+                      onClick={() => setMobileNavOpen(false)}
+                      className={mobileDrawerItemClass(currentPath === '/admin-manual-entry.html')}
+                    >
+                      <PenSquare className="h-4 w-4 shrink-0" />
+                      <span className="truncate">الإدخال اليدوي</span>
+                    </Link>
+                  )}
+                  <Link
+                    to="/admin-import.html"
+                    onClick={() => setMobileNavOpen(false)}
+                    className={cn(
+                      mobileDrawerItemClass(currentPath === '/admin-import.html'),
+                      !isAdminUp && 'col-span-2 sm:col-span-1'
+                    )}
+                  >
+                    <FileSpreadsheet className="h-4 w-4 shrink-0" />
+                    <span className="truncate">تحديث البيانات</span>
+                  </Link>
+                </div>
+              </div>
+
+              {/* Employees Group */}
+              <div className="border-t border-border/70 pt-3 space-y-2">
+                <div className="px-1 text-[11px] font-bold text-muted-foreground">الموظفون</div>
+                <div className="grid grid-cols-2 gap-2">
+                  {EMPLOYEE_SUB_ROUTES.map((item) => {
+                    const Icon = item.icon;
+                    const active = currentPath === item.to;
+                    return (
+                      <Link
+                        key={item.to}
+                        to={item.to}
+                        onClick={() => setMobileNavOpen(false)}
+                        className={mobileDrawerItemClass(active)}
+                      >
+                        <Icon className="h-4 w-4 shrink-0" />
+                        <span className="truncate">{item.label}</span>
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* System Settings Group (Creator Only) */}
+              {isCreator && (
+                <div className="border-t border-border/70 pt-3 space-y-2">
+                  <div className="px-1 text-[11px] font-bold text-muted-foreground">
+                    إعدادات النظام
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <Link
+                      to="/settings.html"
+                      onClick={() => setMobileNavOpen(false)}
+                      className={mobileDrawerItemClass(currentPath === '/settings.html')}
+                    >
+                      <SlidersHorizontal className="h-4 w-4 shrink-0" />
+                      <span>الإعدادات العامة والبيانات</span>
+                    </Link>
+                    <Link
+                      to="/audit-logs.html"
+                      onClick={() => setMobileNavOpen(false)}
+                      className={mobileDrawerItemClass(currentPath === '/audit-logs.html')}
+                    >
+                      <ScrollText className="h-4 w-4 shrink-0" />
+                      <span>سجل العمليات</span>
+                    </Link>
+                    <Link
+                      to="/themes.html"
+                      onClick={() => setMobileNavOpen(false)}
+                      className={mobileDrawerItemClass(currentPath === '/themes.html')}
+                    >
+                      <Palette className="h-4 w-4 shrink-0" />
+                      <span>بانر الصفحة الرئيسية</span>
+                    </Link>
+                  </div>
+                </div>
+              )}
+            </div>
+          </nav>
+        </div>
+      )}
 
       {/* Slot immediately after topbar (e.g. Home System Banner) */}
       {beforeContent}

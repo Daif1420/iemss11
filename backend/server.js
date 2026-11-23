@@ -62,7 +62,7 @@ const { maybeRunAutoPurge } = require('./utils/systemSettings');
 if (require.main === module) {
   const port = Number(process.env.PORT || 3000);
   if (db.isMock()) {
-    console.warn('[IEMS API] DATABASE_URL not set — using in-memory mock database seeded from database/initial-data.json');
+    console.warn('[IEMS API] DATABASE_URL not set — using an empty in-memory mock database (development only)');
   }
   app.listen(port, '0.0.0.0', () => {
     console.log(`[IEMS API] listening on http://0.0.0.0:${port}`);

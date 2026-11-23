@@ -1,16 +1,28 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import {
-  Activity,
   Award,
   BarChart3,
   Calendar,
+  CalendarCheck,
   CheckCircle2,
   Clock,
   Layers,
   LayoutGrid,
   Table2,
   Target,
+  UserCheck,
 } from 'lucide-react';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
 import type { EmployeeDetailPayload, SupervisorTargetEntry } from '@/types/iems';
@@ -81,15 +93,56 @@ function barColorClass(ratio: number | null): string {
   return 'bg-emerald-600 dark:bg-emerald-500';
 }
 
-function performanceStatusLabel(ratio: number | null): { text: string; toneClass: string } {
-  if (ratio === null || !Number.isFinite(ratio)) {
-    return { text: 'قيد التحديث', toneClass: 'text-muted-foreground' };
-  }
+function chartFillColor(ratio: number | null): string {
+  if (ratio === null || !Number.isFinite(ratio)) return '#94A3B8';
   const pct = ratio * 100;
-  if (pct >= 100) return { text: 'مكتمل التارجت', toneClass: 'text-emerald-600 dark:text-emerald-400' };
-  if (pct >= 70) return { text: 'أداء قوي', toneClass: 'text-emerald-600 dark:text-emerald-400' };
-  if (pct >= 50) return { text: 'قيد التقدم', toneClass: 'text-amber-600 dark:text-amber-400' };
-  return { text: 'يحتاج متابعة', toneClass: 'text-destructive' };
+  if (pct < 50) return '#DC2626';
+  if (pct < 70) return '#D97706';
+  return '#059669';
+}
+
+function performanceStatusLabel(ratio: number | null): {
+  text: string;
+  badgeClass: string;
+} {
+  if (ratio === null || !Number.isFinite(ratio)) {
+    return {
+      text: 'قيد التحديث',
+      badgeClass: 'border-border bg-secondary/60 text-muted-foreground',
+    };
+  }
+  const pct = Math.round(ratio * 100);
+  if (pct > 100) {
+    return {
+      text: 'تجاوز التارجت',
+      badgeClass:
+        'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+    };
+  }
+  if (pct === 100) {
+    return {
+      text: 'مكتمل التارجت',
+      badgeClass:
+        'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+    };
+  }
+  if (pct >= 70) {
+    return {
+      text: 'أداء قوي',
+      badgeClass:
+        'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+    };
+  }
+  if (pct >= 50) {
+    return {
+      text: 'قيد التقدم',
+      badgeClass: 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300',
+    };
+  }
+  return {
+    text: 'يحتاج متابعة',
+    badgeClass: 'border-destructive/30 bg-destructive/10 text-destructive',
+  };
 }
 
 interface NormalizedProfile {
@@ -107,6 +160,7 @@ interface EmployeePerformanceSectionProps {
   showAllResidenceField?: boolean;
   showBonusAndDeductions?: boolean;
   isSelfView?: boolean;
+  afterHeroSlot?: ReactNode;
 }
 
 export function EmployeePerformanceSection({
@@ -118,10 +172,12 @@ export function EmployeePerformanceSection({
   showAllResidenceField = false,
   showBonusAndDeductions = true,
   isSelfView = false,
+  afterHeroSlot,
 }: EmployeePerformanceSectionProps) {
   const { user } = useAuth();
   const [pdfBusy, setPdfBusy] = useState(false);
   const [activeShiftTab, setActiveShiftTab] = useState<string>('__FIRST__');
+  const [attendanceFilter, setAttendanceFilter] = useState<'all' | 'present' | 'absence'>('all');
   const [matrixViewMode, setMatrixViewMode] = useState<'table' | 'cards'>('table');
   const [matrixFilter, setMatrixFilter] = useState<'all' | 'absence'>('all');
 
@@ -136,13 +192,9 @@ export function EmployeePerformanceSection({
     combinedPercentWithSup,
     supervisorMonthlyTargetTotal,
     stageProgressList,
-    totalStageAchieved,
-    totalStageTarget,
   } = useMemo(() => {
     let percentSum = 0;
     let hasPercent = false;
-    let achievedSum = 0;
-    let targetSum = 0;
     const progressRows: {
       stage: string;
       achieved: number;
@@ -164,8 +216,6 @@ export function EmployeePerformanceSection({
         const validTarget = Number.isFinite(target) && target > 0 ? target : null;
         const ratio = validTarget ? sum / validTarget : null;
 
-        achievedSum += sum;
-        if (validTarget) targetSum += validTarget;
         if (ratio !== null) {
           percentSum += ratio;
           hasPercent = true;
@@ -199,8 +249,6 @@ export function EmployeePerformanceSection({
       combinedPercentWithSup: combined,
       supervisorMonthlyTargetTotal: supMonthly,
       stageProgressList: progressRows,
-      totalStageAchieved: achievedSum,
-      totalStageTarget: targetSum,
     };
   }, [data.stages, data.supervisorTargets, globalStageTargets, s.percentage]);
 
@@ -348,7 +396,11 @@ export function EmployeePerformanceSection({
   const permissionDays = Number(s.leave_with_permission || 0);
   const unauthDays = Number(s.leave_without_permission ?? s.unauthorized_absence ?? 0);
   const sickDays = Number(s.sick_leave || 0);
+  const examDays = Number(s.exam_leave || 0);
+  const unclassifiedDays = Number(s.unclassified_absence || 0);
+  const lateDays = Number(s.late_days || 0);
   const lateHours = Number(s.late_hours || 0);
+  const overtimeDays = Number(s.overtime_days || 0);
   const overtimeHours = Number(s.overtime_hours || 0);
   const specialBonusDays = Number(s.special_bonus_days || 0);
   const specialDeductions = Number(s.special_deductions || 0);
@@ -358,15 +410,17 @@ export function EmployeePerformanceSection({
     sickDays > 0 ? `مرضي: ${fmtNumber(sickDays)}` : null,
     casualDays > 0 ? `عارضة: ${fmtNumber(casualDays)}` : null,
     permissionDays > 0 ? `بإذن: ${fmtNumber(permissionDays)}` : null,
+    examDays > 0 ? `امتحان: ${fmtNumber(examDays)}` : null,
+    unclassifiedDays > 0 ? `غير مصنف: ${fmtNumber(unclassifiedDays)}` : null,
   ].filter(Boolean);
 
   const disciplineRows: {
     label: string;
     value: string;
-    tone: 'default' | 'primary' | 'success' | 'danger';
+    tone: 'default' | 'primary' | 'success' | 'danger' | 'yellow' | 'purple' | 'burgundy';
   }[] = [
     ...(casualDays > 0
-      ? [{ label: 'إجازة عارضة', value: fmtNumber(casualDays), tone: 'default' as const }]
+      ? [{ label: 'إجازة عارضة', value: fmtNumber(casualDays), tone: 'yellow' as const }]
       : []),
     ...(permissionDays > 0
       ? [{ label: 'إجازة بإذن', value: fmtNumber(permissionDays), tone: 'default' as const }]
@@ -375,10 +429,22 @@ export function EmployeePerformanceSection({
       ? [{ label: 'غياب بدون إذن', value: fmtNumber(unauthDays), tone: 'danger' as const }]
       : []),
     ...(sickDays > 0
-      ? [{ label: 'إجازة مرضي', value: fmtNumber(sickDays), tone: 'default' as const }]
+      ? [{ label: 'إجازة مرضي', value: fmtNumber(sickDays), tone: 'burgundy' as const }]
+      : []),
+    ...(examDays > 0
+      ? [{ label: 'إجازة امتحان', value: fmtNumber(examDays), tone: 'purple' as const }]
+      : []),
+    ...(unclassifiedDays > 0
+      ? [{ label: 'غير مصنف', value: fmtNumber(unclassifiedDays), tone: 'default' as const }]
+      : []),
+    ...(lateDays > 0
+      ? [{ label: 'أيام التأخير', value: fmtNumber(lateDays), tone: 'danger' as const }]
       : []),
     ...(lateHours > 0
       ? [{ label: 'ساعات التأخير', value: fmtHours(lateHours), tone: 'danger' as const }]
+      : []),
+    ...(overtimeDays > 0
+      ? [{ label: 'أيام الإضافي', value: fmtNumber(overtimeDays), tone: 'success' as const }]
       : []),
     ...(overtimeHours > 0
       ? [{ label: 'ساعات الإضافي', value: fmtHours(overtimeHours), tone: 'success' as const }]
@@ -425,10 +491,58 @@ export function EmployeePerformanceSection({
   const heroPercent = combinedPercentWithSup ?? totalAchievementPercent;
   const heroRoundedPct =
     heroPercent !== null && Number.isFinite(heroPercent) ? Math.round(heroPercent * 100) : null;
-  const heroClampedRatio =
-    heroPercent !== null && Number.isFinite(heroPercent) ? Math.max(0, Math.min(1, heroPercent)) : 0;
-  const totalSegments = 25;
-  const activeSegments = Math.round(heroClampedRatio * totalSegments);
+  const heroAxisMax = Math.max(
+    100,
+    heroRoundedPct !== null ? Math.ceil(heroRoundedPct / 25) * 25 : 100
+  );
+  const heroFillHex = chartFillColor(heroPercent);
+  const spectrumStep = heroAxisMax <= 180 ? 5 : heroAxisMax <= 360 ? 10 : 25;
+  const spectrumData = Array.from(
+    { length: Math.max(10, Math.round(heroAxisMax / spectrumStep)) },
+    (_, index) => {
+      const pct = (index + 1) * spectrumStep;
+      const reached = heroRoundedPct !== null && heroRoundedPct >= pct;
+      const partial =
+        heroRoundedPct !== null &&
+        heroRoundedPct > pct - spectrumStep &&
+        heroRoundedPct < pct;
+      const isOverTarget = pct > 100;
+      const baseHeight = isOverTarget
+        ? Math.min(
+            100,
+            80 + Math.round(((pct - 100) / Math.max(25, heroAxisMax - 100)) * 20)
+          )
+        : 30 + Math.round((pct / 100) * 44);
+      const fill =
+        reached || partial
+          ? isOverTarget
+            ? 'url(#iemsSurgeGrad)'
+            : 'url(#iemsTargetGrad)'
+          : 'var(--secondary)';
+      return {
+        pct,
+        height: baseHeight,
+        reached,
+        partial,
+        fill,
+        fillOpacity: reached ? 1 : partial ? 0.58 : 0.72,
+        zoneLabel:
+          pct > 100
+            ? 'نطاق التفوق فوق التارجت'
+            : pct >= 70
+              ? 'نطاق الأداء القوي'
+              : pct >= 50
+                ? 'نطاق القبول'
+                : 'نطاق الانطلاق',
+      };
+    }
+  );
+  const spectrumTicks =
+    heroAxisMax === 100
+      ? [25, 50, 75, 100]
+      : heroAxisMax >= 150
+        ? [50, 100, heroAxisMax]
+        : [50, heroAxisMax];
   const statusInfo = performanceStatusLabel(heroPercent);
   const contributionStages = stageProgressList.filter((st) => st.achieved > 0);
   const contributionSum = contributionStages.reduce((sum, st) => sum + st.achieved, 0);
@@ -499,16 +613,20 @@ export function EmployeePerformanceSection({
           )}
         </div>
 
-        {/* Focal Showcase Band: Overall Achievement Indicator */}
+        {/* Focal Showcase Band: Wide Horizontal Recharts Step-Wave Performance Spectrum */}
         <div className="px-5 py-5 sm:px-7 sm:py-6 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
-            <div className="space-y-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="text-sm sm:text-base font-extrabold text-foreground">
+          <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
+            <div className="space-y-1.5">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <h3 className="text-base sm:text-lg font-extrabold text-foreground">
                   مؤشر الإنجاز العام
                 </h3>
-                <span className="text-border">·</span>
-                <span className={cn('text-xs font-extrabold', statusInfo.toneClass)}>
+                <span
+                  className={cn(
+                    'inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-extrabold',
+                    statusInfo.badgeClass
+                  )}
+                >
                   {statusInfo.text}
                 </span>
               </div>
@@ -530,17 +648,17 @@ export function EmployeePerformanceSection({
                       )}
                     >
                       {heroRoundedPct > 100
-                        ? `عديت التارجت بزيادة +${heroRoundedPct - 100}% فوق الـ 100%`
+                        ? `أداء متفوق · تجاوزت التارجت بنسبة +${heroRoundedPct - 100}% أعلى من المستهدف`
                         : heroRoundedPct === 100
-                          ? 'تم تحقيق التارجت الكامل 100%'
-                          : `متبقي ${100 - heroRoundedPct}% للوصول إلى 100%`}
+                          ? 'مكتمل · تم تحقيق 100% من التارجت المطلوب'
+                          : `متبقي ${100 - heroRoundedPct}% للوصول إلى التارجت الكامل`}
                     </span>
                   </>
                 )}
               </div>
             </div>
 
-            <div className="flex items-baseline sm:text-end tabular-nums">
+            <div className="flex items-baseline gap-2.5 sm:text-end tabular-nums">
               <PercentText
                 value={heroPercent}
                 className="text-3xl sm:text-5xl font-black tracking-tight leading-none"
@@ -548,66 +666,220 @@ export function EmployeePerformanceSection({
             </div>
           </div>
 
-          {/* 25-Segment Architectural Milestone Scale */}
+          {/* Enhanced Gradient Step-Wave Spectrum */}
           <div className="space-y-2">
             <div
-              className="flex items-stretch gap-1 sm:gap-1.5 h-3.5 sm:h-4"
-              role="progressbar"
-              aria-valuenow={Math.round(heroClampedRatio * 100)}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-label="مؤشر الإنجاز العام"
+              dir="ltr"
+              className="w-full h-38 sm:h-42 rounded-xl border border-border/70 bg-gradient-to-b from-secondary/10 to-secondary/30 px-2.5 pt-2 pb-1"
+              role="img"
+              aria-label={`مؤشر الإنجاز العام: ${heroRoundedPct !== null ? `${heroRoundedPct}%` : 'غير متوفر'}`}
             >
-              {Array.from({ length: totalSegments }).map((_, idx) => {
-                const filled = idx < activeSegments;
-                return (
-                  <div
-                    key={idx}
-                    className={cn(
-                      'flex-1 rounded-[3px] transition-colors duration-200',
-                      filled ? barColorClass(heroPercent) : 'bg-secondary'
-                    )}
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={spectrumData}
+                  margin={{ top: 24, right: 8, left: 8, bottom: 2 }}
+                  barCategoryGap="20%"
+                >
+                  <defs>
+                    <linearGradient id="iemsTargetGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={heroFillHex} stopOpacity={1} />
+                      <stop offset="100%" stopColor={heroFillHex} stopOpacity={0.62} />
+                    </linearGradient>
+                    <linearGradient id="iemsSurgeGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#34D399" stopOpacity={1} />
+                      <stop offset="100%" stopColor="#059669" stopOpacity={0.75} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid
+                    vertical={false}
+                    stroke="var(--border)"
+                    strokeOpacity={0.45}
+                    strokeDasharray="3 3"
                   />
-                );
-              })}
+                  <XAxis
+                    dataKey="pct"
+                    ticks={spectrumTicks}
+                    tickFormatter={(val: number) => `${val}%`}
+                    tick={{ fontSize: 11, fontWeight: 700, fill: 'var(--muted-foreground)' }}
+                    tickLine={false}
+                    axisLine={{ stroke: 'var(--border)', strokeOpacity: 0.75 }}
+                    interval={0}
+                  />
+                  <YAxis domain={[0, 106]} hide />
+                  <ReferenceLine
+                    x={50}
+                    stroke="var(--muted-foreground)"
+                    strokeOpacity={0.35}
+                    strokeDasharray="3 3"
+                  />
+                  <ReferenceLine
+                    x={100}
+                    stroke="var(--primary)"
+                    strokeOpacity={0.9}
+                    strokeWidth={1.75}
+                    strokeDasharray="4 3"
+                    label={{
+                      value: 'التارجت 100%',
+                      position: 'top',
+                      fill: 'var(--primary)',
+                      fontSize: 11,
+                      fontWeight: 800,
+                    }}
+                  />
+                  <Tooltip
+                    cursor={{ fill: 'var(--primary)', fillOpacity: 0.06 }}
+                    content={({
+                      active,
+                      payload,
+                    }: {
+                      active?: boolean;
+                      payload?: readonly {
+                        payload?: {
+                          pct: number;
+                          reached: boolean;
+                          partial: boolean;
+                          zoneLabel: string;
+                        };
+                      }[];
+                    }) => {
+                      const pt = payload?.[0]?.payload;
+                      if (!active || !pt) return null;
+                      return (
+                        <div
+                          dir="rtl"
+                          className="rounded-lg border border-border bg-card px-3 py-2 text-xs shadow-md space-y-1"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="font-bold text-foreground">محطة {pt.pct}%</span>
+                            <span
+                              className={cn(
+                                'font-bold',
+                                pt.reached || pt.partial
+                                  ? 'text-emerald-600 dark:text-emerald-400'
+                                  : 'text-muted-foreground'
+                              )}
+                            >
+                              {pt.reached ? 'محقق ✓' : pt.partial ? 'قيد الإنجاز' : 'متبقي'}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-muted-foreground">{pt.zoneLabel}</div>
+                          <div className="pt-1 border-t border-border/60 flex items-center gap-2 tabular-nums">
+                            <span className="text-muted-foreground">إنجازك الحالي:</span>
+                            <span className="font-extrabold text-primary">
+                              {fmtPercent(heroPercent)}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    }}
+                  />
+                  <Bar
+                    dataKey="height"
+                    radius={[6, 6, 3, 3]}
+                    maxBarSize={18}
+                    isAnimationActive
+                    animationDuration={750}
+                  >
+                    {spectrumData.map((entry) => (
+                      <Cell
+                        key={`spectrum-${entry.pct}`}
+                        fill={entry.fill}
+                        fillOpacity={entry.fillOpacity}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
             </div>
 
-            {/* Aligned Milestone Ruler (0% / 50% / 70% / 100%) */}
-            <div className="flex items-center justify-between text-[10px] sm:text-[11px] font-semibold text-muted-foreground tabular-nums">
-              <span>0%</span>
-              <span>50% مقبول</span>
-              <span>70% قوي</span>
-              <span>100% التارجت</span>
+            {/* Clean Zone Legend */}
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground px-1">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                <span className="inline-flex items-center gap-1.5">
+                  <span
+                    className="h-2.5 w-2.5 rounded-sm shrink-0"
+                    style={{ backgroundColor: heroFillHex }}
+                  />
+                  <span>نطاق التارجت المحقق</span>
+                </span>
+                {heroRoundedPct !== null && heroRoundedPct > 100 && (
+                  <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-600 dark:text-emerald-400">
+                    <span className="h-2.5 w-2.5 rounded-sm bg-emerald-400 shrink-0" />
+                    <span>تجاوز التارجت (+{heroRoundedPct - 100}%)</span>
+                  </span>
+                )}
+              </div>
+              <span className="tabular-nums font-semibold">
+                المقياس: 0% — {heroAxisMax}%
+              </span>
             </div>
           </div>
 
-          {/* Subtle Stage Contribution Share Summary (when multiple active stages exist) */}
+          {/* Stage Contribution Share Bar & Breakdown */}
           {contributionStages.length > 1 && contributionSum > 0 && (
-            <div className="pt-2 border-t border-border/60 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-              <span className="font-bold text-foreground">توزيع الإنجاز:</span>
-              {contributionStages.map((st, idx) => {
-                const share = (st.achieved / contributionSum) * 100;
-                return (
-                  <span
-                    key={st.stage}
-                    className="inline-flex items-center gap-1.5 tabular-nums"
-                  >
-                    {idx > 0 && <span className="text-border">·</span>}
-                    <span>{st.stage}</span>
-                    <span className="font-bold text-foreground">{share.toFixed(0)}%</span>
-                  </span>
-                );
-              })}
+            <div className="pt-2 border-t border-border/60 space-y-2">
+              <div className="h-2 w-full overflow-hidden rounded-full bg-secondary flex gap-0.5">
+                {contributionStages.map((st, idx) => {
+                  const share = (st.achieved / contributionSum) * 100;
+                  const sliceTone =
+                    idx % 4 === 0
+                      ? 'bg-primary'
+                      : idx % 4 === 1
+                        ? 'bg-emerald-500'
+                        : idx % 4 === 2
+                          ? 'bg-amber-500'
+                          : 'bg-sky-500';
+                  return (
+                    <div
+                      key={st.stage}
+                      className={cn('h-full transition-all', sliceTone)}
+                      style={{ width: `${share}%` }}
+                      title={`${st.stage}: ${share.toFixed(0)}%`}
+                    />
+                  );
+                })}
+              </div>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+                <span className="font-bold text-foreground">توزيع الإنجاز:</span>
+                {contributionStages.map((st, idx) => {
+                  const share = (st.achieved / contributionSum) * 100;
+                  const dotTone =
+                    idx % 4 === 0
+                      ? 'bg-primary'
+                      : idx % 4 === 1
+                        ? 'bg-emerald-500'
+                        : idx % 4 === 2
+                          ? 'bg-amber-500'
+                          : 'bg-sky-500';
+                  return (
+                    <span
+                      key={st.stage}
+                      className="inline-flex items-center gap-1.5 tabular-nums"
+                    >
+                      <span className={cn('h-2 w-2 rounded-full shrink-0', dotTone)} />
+                      <span>{st.stage}</span>
+                      <span className="font-bold text-foreground">{share.toFixed(0)}%</span>
+                    </span>
+                  );
+                })}
+              </div>
             </div>
           )}
         </div>
 
-        {/* 2. Primary 3-KPI Strip (No duplicate overall percentage) */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 border-t border-border/70 divide-y sm:divide-y-0 sm:divide-x sm:divide-x-reverse divide-border/70 bg-secondary/20">
+        {/* 2. Primary KPI Strip (No duplicate overall percentage; Work Nature Allowance in its own KPI card when > 0) */}
+        <div
+          className={cn(
+            'grid grid-cols-1 border-t border-border/70 divide-y sm:divide-y-0 sm:divide-x sm:divide-x-reverse divide-border/70 bg-secondary/20',
+            showBonusAndDeductions && hasWorkNature
+              ? 'sm:grid-cols-2 lg:grid-cols-4'
+              : 'sm:grid-cols-3'
+          )}
+        >
           <div className="p-4 space-y-1">
             <div className="flex items-center justify-between gap-2 text-xs font-semibold text-muted-foreground">
               <span>أيام الحضور</span>
-              <Activity className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <UserCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
             </div>
             <div className="text-2xl font-extrabold text-emerald-600 dark:text-emerald-400 tabular-nums">
               {fmtDecimal(presentDays)}
@@ -638,29 +910,35 @@ export function EmployeePerformanceSection({
           </div>
 
           {showBonusAndDeductions ? (
-            <div className="p-4 space-y-1">
-              <div className="flex items-center justify-between gap-2 text-xs font-semibold text-muted-foreground">
-                <span>{hasWorkNature ? 'الشريحة وبدل طبيعة العمل' : 'الشريحة'}</span>
-                <Layers className="h-4 w-4 text-primary shrink-0" />
-              </div>
-              <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5 tabular-nums">
-                <span className="text-2xl font-extrabold text-foreground">
+            <>
+              <div className="p-4 space-y-1">
+                <div className="flex items-center justify-between gap-2 text-xs font-semibold text-muted-foreground">
+                  <span>الشريحة</span>
+                  <Layers className="h-4 w-4 text-primary shrink-0" />
+                </div>
+                <div className="text-2xl font-extrabold text-foreground tabular-nums">
                   {hasBonusTier ? `شريحة ${String(s.bonus_tier)}` : '—'}
-                </span>
-                {hasWorkNature && (
-                  <span className="text-xs font-bold text-primary">
-                    · بدل طبيعة عمل: {fmtNumber(workNatureAllowance)}
-                  </span>
-                )}
+                </div>
+                <div className="text-[11px] text-muted-foreground truncate">
+                  {hasBonusTier ? 'الشريحة المعتمدة في الفترة' : 'غير محددة في الفترة'}
+                </div>
               </div>
-              <div className="text-[11px] text-muted-foreground truncate">
-                {hasWorkNature
-                  ? 'الشريحة وبدل طبيعة العمل المعتمدان'
-                  : hasBonusTier
-                    ? 'الشريحة المعتمدة في الفترة'
-                    : 'غير محددة في الفترة'}
-              </div>
-            </div>
+
+              {hasWorkNature && (
+                <div className="p-4 space-y-1">
+                  <div className="flex items-center justify-between gap-2 text-xs font-semibold text-muted-foreground">
+                    <span>بدل طبيعة العمل</span>
+                    <Award className="h-4 w-4 text-primary shrink-0" />
+                  </div>
+                  <div className="text-2xl font-extrabold text-primary tabular-nums">
+                    {fmtNumber(workNatureAllowance)}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground truncate">
+                    بدل طبيعة العمل المعتمد في الفترة
+                  </div>
+                </div>
+              )}
+            </>
           ) : (
             <div className="p-4 space-y-1">
               <div className="flex items-center justify-between gap-2 text-xs font-semibold text-muted-foreground">
@@ -678,10 +956,12 @@ export function EmployeePerformanceSection({
         </div>
       </section>
 
+      {afterHeroSlot}
+
       {/* 3. Two-Column Analytics & Structured Breakdown */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
         {/* Stage-by-Stage Target Progress Bars */}
-        <Card className="lg:col-span-7">
+        <Card className="lg:col-span-7 flex flex-col">
           <CardHeader className="pb-3 flex-row items-center justify-between space-y-0 border-b border-border/70">
             <div className="flex items-center gap-2">
               <BarChart3 className="h-4 w-4 text-primary" />
@@ -692,13 +972,8 @@ export function EmployeePerformanceSection({
                 </CardDescription>
               </div>
             </div>
-            {totalStageTarget > 0 && (
-              <span className="text-xs font-extrabold text-muted-foreground tabular-nums">
-                {fmtDecimal(totalStageAchieved)} / {fmtDecimal(totalStageTarget)}
-              </span>
-            )}
           </CardHeader>
-          <CardContent className="pt-4">
+          <CardContent className="pt-4 flex-1">
             {stageProgressList.length === 0 ? (
               <div className="py-10 text-center text-xs text-muted-foreground">
                 لا توجد مراحل إنتاجية مسجلة في الفترة المختارة.
@@ -740,7 +1015,7 @@ export function EmployeePerformanceSection({
         </Card>
 
         {/* Attendance, Leaves & Financial Hairline List (Zero values omitted) */}
-        <Card className="lg:col-span-5">
+        <Card className="lg:col-span-5 flex flex-col">
           <CardHeader className="pb-3 flex-row items-center justify-between space-y-0 border-b border-border/70">
             <div className="flex items-center gap-2">
               <Clock className="h-4 w-4 text-primary" />
@@ -779,6 +1054,225 @@ export function EmployeePerformanceSection({
           </CardContent>
         </Card>
       </div>
+
+      {/* 3b. Dedicated Daily Attendance Breakdown ("تفاصيل الحضور اليومي") */}
+      <Card>
+        <CardHeader className="pb-3 flex-row flex-wrap items-center justify-between gap-3 space-y-0 border-b border-border/70">
+          <div className="flex items-center gap-2">
+            <CalendarCheck className="h-4 w-4 text-primary" />
+            <div>
+              <CardTitle className="text-sm font-extrabold">تفاصيل الحضور اليومي</CardTitle>
+              <CardDescription className="text-[11px]">
+                سجل الحضور والإجازات والغياب يوماً بيوم خلال الفترة
+              </CardDescription>
+            </div>
+          </div>
+
+          <div className="inline-flex items-center rounded-lg border border-border bg-secondary/40 p-1 text-[11px] no-print">
+            {(
+              [
+                ['all', 'كل الأيام'],
+                ['present', 'أيام الحضور'],
+                ['absence', 'الغياب والإجازات'],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setAttendanceFilter(key)}
+                className={cn(
+                  'rounded-md px-2.5 py-1 font-bold transition-colors cursor-pointer',
+                  attendanceFilter === key
+                    ? 'bg-card text-foreground shadow-xs'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </CardHeader>
+
+        {/* Attendance Summary Strip */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-border/60 bg-secondary/20 px-4 sm:px-6 py-2.5 text-xs tabular-nums">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="text-muted-foreground">إجمالي الحضور:</span>
+            <strong className="text-emerald-600 dark:text-emerald-400">
+              {fmtDecimal(presentDays)} يوم
+            </strong>
+          </span>
+          <span className="text-border">·</span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="text-muted-foreground">إجمالي الغياب:</span>
+            <strong className={absenceDays > 0 ? 'text-destructive' : 'text-foreground'}>
+              {fmtNumber(absenceDays)} يوم
+            </strong>
+          </span>
+          {casualDays > 0 && (
+            <>
+              <span className="text-border">·</span>
+              <span className="text-muted-foreground">
+                عارضة: <strong className="text-yellow-600 dark:text-yellow-400">{fmtNumber(casualDays)}</strong>
+              </span>
+            </>
+          )}
+          {permissionDays > 0 && (
+            <>
+              <span className="text-border">·</span>
+              <span className="text-muted-foreground">
+                بإذن: <strong className="text-amber-600 dark:text-amber-400">{fmtNumber(permissionDays)}</strong>
+              </span>
+            </>
+          )}
+          {unauthDays > 0 && (
+            <>
+              <span className="text-border">·</span>
+              <span className="text-muted-foreground">
+                بدون إذن: <strong className="text-destructive">{fmtNumber(unauthDays)}</strong>
+              </span>
+            </>
+          )}
+          {sickDays > 0 && (
+            <>
+              <span className="text-border">·</span>
+              <span className="text-muted-foreground">
+                مرضي: <strong className="text-[#800020] dark:text-[#f07b93]">{fmtNumber(sickDays)}</strong>
+              </span>
+            </>
+          )}
+          {examDays > 0 && (
+            <>
+              <span className="text-border">·</span>
+              <span className="text-muted-foreground">
+                امتحان: <strong className="text-purple-600 dark:text-purple-400">{fmtNumber(examDays)}</strong>
+              </span>
+            </>
+          )}
+          {unclassifiedDays > 0 && (
+            <>
+              <span className="text-border">·</span>
+              <span className="text-muted-foreground">
+                غير مصنف: <strong className="text-foreground">{fmtNumber(unclassifiedDays)}</strong>
+              </span>
+            </>
+          )}
+        </div>
+
+        <CardContent className="space-y-4 pt-4">
+          {(() => {
+            const attProfiles = displayedProfiles
+              .map((p) => {
+                const rawAtt = Object.entries(p.stages || {}).find(
+                  ([k]) => String(k).trim() === 'الحضور'
+                )?.[1];
+                const items = (rawAtt || [])
+                  .filter((r) => r.value !== null && r.value !== undefined && String(r.value).trim() !== '')
+                  .sort((a, b) => a.date.localeCompare(b.date))
+                  .map((r) => {
+                    const sv = String(r.value).trim();
+                    const n = Number(sv);
+                    const isUnauth = sv === 'ب';
+                    const isPerm = sv === 'ا' || sv === 'أ';
+                    const isSick = sv === 'م';
+                    const isExam = sv === 'ن';
+                    const isCasual = sv === 'ع';
+                    const isUnclassifiedZero = sv === '0' || (Number.isFinite(n) && n === 0);
+                    const isPresent = Number.isFinite(n) && n > 0;
+                    const label = isUnauth
+                      ? 'بدون إذن'
+                      : isPerm
+                        ? 'إجازة بإذن'
+                        : isSick
+                          ? 'مرضي'
+                          : isExam
+                            ? 'امتحان'
+                            : isCasual
+                              ? 'عارضة'
+                              : isUnclassifiedZero
+                                ? 'غير مصنف'
+                                : isPresent
+                                  ? n < 1
+                                    ? `نصف يوم (${fmtDecimal(n)})`
+                                    : `حضور (${fmtDecimal(n)})`
+                                  : sv;
+                    const toneClass = isUnauth
+                      ? 'border-destructive/35 bg-destructive/8 text-destructive'
+                      : isExam
+                        ? 'border-purple-500/45 bg-purple-500/12 text-purple-700 dark:text-purple-300'
+                        : isCasual
+                          ? 'border-yellow-500/45 bg-yellow-500/12 text-yellow-700 dark:text-yellow-300'
+                          : isPerm
+                            ? 'border-amber-500/35 bg-amber-500/8 text-amber-700 dark:text-amber-400'
+                            : isSick
+                              ? 'border-[#800020]/35 bg-[#800020]/10 text-[#800020] dark:border-[#a82443]/50 dark:bg-[#800020]/25 dark:text-[#f07b93]'
+                              : isUnclassifiedZero
+                                ? 'border-slate-500/35 bg-slate-500/10 text-slate-700 dark:text-slate-300'
+                                : isPresent
+                                  ? 'border-emerald-500/30 bg-emerald-500/8 text-emerald-700 dark:text-emerald-400'
+                                  : 'border-border bg-secondary/35 text-foreground';
+                    return { date: r.date, isPresent, isAbsence: !isPresent, label, toneClass };
+                  });
+                return { shift: p.shift, items };
+              })
+              .filter((g) => g.items.length > 0);
+
+            if (attProfiles.length === 0) {
+              return (
+                <div className="py-8 text-center text-xs text-muted-foreground">
+                  لا توجد سجلات حضور يومية مفصلة في الفترة المختارة.
+                </div>
+              );
+            }
+
+            return attProfiles.map((group, gIdx) => {
+              const visibleItems = group.items.filter((it) => {
+                if (attendanceFilter === 'present') return it.isPresent;
+                if (attendanceFilter === 'absence') return it.isAbsence;
+                return true;
+              });
+
+              return (
+                <div key={`${group.shift}-${gIdx}`} className="space-y-2.5">
+                  {duplicateShifts && (
+                    <div className="text-xs font-extrabold text-primary">
+                      حضور Shift {group.shift}
+                    </div>
+                  )}
+                  {visibleItems.length === 0 ? (
+                    <div className="rounded-lg border border-border py-6 text-center text-xs text-muted-foreground">
+                      {attendanceFilter === 'absence'
+                        ? 'لا توجد أيام غياب أو إجازات مسجلة في هذه الفترة.'
+                        : 'لا توجد أيام حضور مسجلة لهذا التحديد.'}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 min-[460px]:grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2">
+                      {visibleItems.map((it) => (
+                        <div
+                          key={it.date}
+                          className={cn(
+                            'rounded-xl border px-2.5 py-2 flex flex-col justify-between gap-1 text-center transition-colors',
+                            it.toneClass
+                          )}
+                        >
+                          <div className="text-[10px] font-semibold opacity-80 leading-tight">
+                            {weekdayArabic(it.date)}
+                          </div>
+                          <div className="text-[11px] font-extrabold tabular-nums text-foreground">
+                            {it.date.slice(8)}/{it.date.slice(5, 7)}
+                          </div>
+                          <div className="text-[11px] font-extrabold leading-tight tabular-nums">
+                            {it.label}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            });
+          })()}
+        </CardContent>
+      </Card>
 
       {/* 4. Supervisor Targets Breakdown */}
       {supervisorSections.length > 0 && (
@@ -1010,8 +1504,9 @@ export function EmployeePerformanceSection({
             const stageEntries = allEntries
               .filter(([name, rows]) => {
                 const trimName = String(name).trim();
-                if (trimName.toUpperCase() === 'TOTAL TARGET %') return false;
-                if (trimName === 'الحضور' && profile.shift !== 'Other') return false;
+                if (trimName === 'الحضور' || trimName.toUpperCase() === 'TOTAL TARGET %') {
+                  return false;
+                }
                 return (rows || []).some(
                   (r) => r.value !== null && r.value !== undefined && r.value !== ''
                 );
@@ -1023,23 +1518,46 @@ export function EmployeePerformanceSection({
             if (totalTargetEntry) totalTargetEntry[1].forEach((r) => dateSet.add(r.date));
             const allDates = [...dateSet].sort();
 
+            const attRowsForFilter =
+              Object.entries(profile.stages || {}).find(
+                ([k]) => String(k).trim() === 'الحضور'
+              )?.[1] || [];
             const dates =
               matrixFilter === 'absence'
-                ? allDates.filter((d) =>
-                    stageEntries.some(([, rows]) => {
-                      const hit = rows.find((r) => r.date === d)?.value;
-                      const sv = String(hit ?? '').trim();
-                      return sv === 'ب' || sv === 'ا' || sv === 'م';
-                    })
+                ? allDates.filter(
+                    (d) =>
+                      stageEntries.some(([, rows]) => {
+                        const hit = rows.find((r) => r.date === d)?.value;
+                        const sv = String(hit ?? '').trim();
+                        return (
+                          sv === 'ب' ||
+                          sv === 'ا' ||
+                          sv === 'أ' ||
+                          sv === 'م' ||
+                          sv === 'ن' ||
+                          sv === 'ع'
+                        );
+                      }) ||
+                      attRowsForFilter.some((r) => {
+                        if (r.date !== d) return false;
+                        const sv = String(r.value ?? '').trim();
+                        const n = Number(sv);
+                        return (
+                          sv === 'ب' ||
+                          sv === 'ا' ||
+                          sv === 'أ' ||
+                          sv === 'م' ||
+                          sv === 'ن' ||
+                          sv === 'ع' ||
+                          sv === '0' ||
+                          (sv !== '' && Number.isFinite(n) && n === 0)
+                        );
+                      })
                   )
                 : allDates;
 
             let overallPercentSum = 0;
             let hasAnyPercent = false;
-            let grandAchievement = 0;
-            let hasGrandAchievement = false;
-            let grandTarget = 0;
-            let hasGrandTarget = false;
 
             const computedRows = stageEntries.map(([stageName, rows]) => {
               const byDate = Object.fromEntries(rows.map((r) => [r.date, r.value]));
@@ -1053,22 +1571,13 @@ export function EmployeePerformanceSection({
                 }
               });
 
-              const isAttendance = String(stageName).trim() === 'الحضور';
               const target = Number(profile.stageTargets?.[stageName]);
-              const hasTarget = !isAttendance && Number.isFinite(target) && target > 0;
+              const hasTarget = Number.isFinite(target) && target > 0;
               const ratio = hasNum && hasTarget ? sum / target : null;
 
               if (ratio !== null) {
                 overallPercentSum += ratio;
                 hasAnyPercent = true;
-              }
-              if (!isAttendance && hasNum) {
-                grandAchievement += sum;
-                hasGrandAchievement = true;
-              }
-              if (hasTarget) {
-                grandTarget += target;
-                hasGrandTarget = true;
               }
 
               return {
@@ -1081,7 +1590,13 @@ export function EmployeePerformanceSection({
               };
             });
 
-            const overallStagePercent = hasAnyPercent ? overallPercentSum : null;
+            const summaryPctNum =
+              s.percentage !== null && s.percentage !== undefined ? Number(s.percentage) : NaN;
+            const overallStagePercent = hasAnyPercent
+              ? overallPercentSum
+              : (!selectedStage || selectedStage === '__ALL__') && Number.isFinite(summaryPctNum)
+                ? summaryPctNum
+                : null;
             const totalRowSpan = computedRows.length + (totalTargetEntry ? 1 : 0);
 
             return (
@@ -1111,7 +1626,16 @@ export function EmployeePerformanceSection({
                         const dayPctNum = Number(dayPctRaw);
                         const hasAbsence = dayItems.some((it) => {
                           const sv = String(it.val).trim();
-                          return sv === 'ب' || sv === 'ا' || sv === 'م';
+                          const isAtt = String(it.stage).trim() === 'الحضور';
+                          return (
+                            sv === 'ب' ||
+                            sv === 'ا' ||
+                            sv === 'أ' ||
+                            sv === 'م' ||
+                            sv === 'ن' ||
+                            sv === 'ع' ||
+                            (isAtt && sv === '0')
+                          );
                         });
 
                         return (
@@ -1146,6 +1670,8 @@ export function EmployeePerformanceSection({
                               ) : (
                                 dayItems.map((it) => {
                                   const sv = String(it.val).trim();
+                                  const isAtt = String(it.stage).trim() === 'الحضور';
+                                  const isUnclassifiedAtt = isAtt && sv === '0';
                                   const n = Number(it.val);
                                   return (
                                     <div
@@ -1159,19 +1685,29 @@ export function EmployeePerformanceSection({
                                         className={cn(
                                           'font-bold tabular-nums',
                                           sv === 'ب' && 'text-destructive',
-                                          (sv === 'ا' || sv === 'م') &&
-                                            'text-amber-600 dark:text-amber-400'
+                                          sv === 'ن' && 'text-purple-600 dark:text-purple-400',
+                                          sv === 'ع' && 'text-yellow-600 dark:text-yellow-400',
+                                          (sv === 'ا' || sv === 'أ') &&
+                                            'text-amber-600 dark:text-amber-400',
+                                          sv === 'م' && 'text-[#800020] dark:text-[#f07b93]',
+                                          isUnclassifiedAtt && 'text-muted-foreground'
                                         )}
                                       >
                                         {sv === 'ب'
                                           ? 'بدون إذن'
-                                          : sv === 'ا'
+                                          : sv === 'ا' || sv === 'أ'
                                             ? 'إجازة بإذن'
                                             : sv === 'م'
                                               ? 'مرضي'
-                                              : Number.isFinite(n)
-                                                ? fmtDecimal(n)
-                                                : sv}
+                                              : sv === 'ن'
+                                                ? 'امتحان'
+                                                : sv === 'ع'
+                                                  ? 'عارضة'
+                                                  : isUnclassifiedAtt
+                                                    ? 'غير مصنف'
+                                                    : Number.isFinite(n)
+                                                      ? fmtDecimal(n)
+                                                      : sv}
                                       </span>
                                     </div>
                                   );
@@ -1241,8 +1777,16 @@ export function EmployeePerformanceSection({
                                     );
                                   }
                                   const strVal = String(v).trim();
+                                  const isAttRow = String(row.stageName).trim() === 'الحضور';
+                                  const isUnclassifiedAtt = isAttRow && strVal === '0';
                                   const isAbsentMark =
-                                    strVal === 'ب' || strVal === 'ا' || strVal === 'م';
+                                    strVal === 'ب' ||
+                                    strVal === 'ا' ||
+                                    strVal === 'أ' ||
+                                    strVal === 'م' ||
+                                    strVal === 'ن' ||
+                                    strVal === 'ع' ||
+                                    isUnclassifiedAtt;
                                   const n = Number(v);
                                   return (
                                     <TableCell
@@ -1250,8 +1794,15 @@ export function EmployeePerformanceSection({
                                       className={cn(
                                         'text-center font-semibold tabular-nums',
                                         strVal === 'ب' && 'text-destructive bg-destructive/5',
-                                        (strVal === 'ا' || strVal === 'م') &&
+                                        strVal === 'ن' &&
+                                          'text-purple-600 dark:text-purple-400 bg-purple-500/8',
+                                        strVal === 'ع' &&
+                                          'text-yellow-600 dark:text-yellow-400 bg-yellow-500/10',
+                                        (strVal === 'ا' || strVal === 'أ') &&
                                           'text-amber-600 dark:text-amber-400 bg-amber-500/5',
+                                        strVal === 'م' &&
+                                          'text-[#800020] bg-[#800020]/8 dark:text-[#f07b93] dark:bg-[#800020]/20',
+                                        isUnclassifiedAtt && 'text-muted-foreground bg-muted/40',
                                         !isAbsentMark && Number.isFinite(n) && n > 0 && 'text-foreground'
                                       )}
                                     >
@@ -1307,11 +1858,11 @@ export function EmployeePerformanceSection({
                                     </TableCell>
                                   );
                                 })}
-                                <TableCell className="text-center tabular-nums">
-                                  {hasGrandAchievement ? fmtDecimal(grandAchievement) : '—'}
+                                <TableCell className="text-center text-muted-foreground tabular-nums">
+                                  —
                                 </TableCell>
-                                <TableCell className="text-center tabular-nums">
-                                  {hasGrandTarget ? fmtDecimal(grandTarget) : '—'}
+                                <TableCell className="text-center text-muted-foreground tabular-nums">
+                                  —
                                 </TableCell>
                                 <TableCell className="text-center">
                                   <PercentText value={overallStagePercent} />
@@ -1349,7 +1900,7 @@ function SummaryRow({
 }: {
   label: string;
   value: string;
-  tone?: 'default' | 'primary' | 'success' | 'danger';
+  tone?: 'default' | 'primary' | 'success' | 'danger' | 'yellow' | 'purple' | 'burgundy';
   numeric?: boolean;
 }) {
   return (
@@ -1362,7 +1913,10 @@ function SummaryRow({
           tone === 'default' && 'text-foreground',
           tone === 'primary' && 'text-primary',
           tone === 'success' && 'text-emerald-600 dark:text-emerald-400',
-          tone === 'danger' && 'text-destructive'
+          tone === 'danger' && 'text-destructive',
+          tone === 'yellow' && 'text-yellow-600 dark:text-yellow-400',
+          tone === 'purple' && 'text-purple-600 dark:text-purple-400',
+          tone === 'burgundy' && 'text-[#800020] dark:text-[#f07b93]'
         )}
       >
         {value}

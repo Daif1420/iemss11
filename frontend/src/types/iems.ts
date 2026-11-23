@@ -97,6 +97,8 @@ export interface AttendanceCompanyRow {
   permission: number;
   unauthorized: number;
   medical: number;
+  exam: number;
+  unclassified: number;
   attendance_rate: number;
 }
 
@@ -109,6 +111,8 @@ export interface AttendanceDailyRow {
   permission: number;
   unauthorized: number;
   medical: number;
+  exam: number;
+  unclassified: number;
   attendance_rate: number;
   absence_rate: number;
 }
@@ -125,6 +129,8 @@ export interface AttendanceEmployeeRow {
   permission: number;
   unauthorized: number;
   medical: number;
+  exam: number;
+  unclassified: number;
   attendance_rate: number;
   master_present_value?: number | null;
 }
@@ -140,6 +146,8 @@ export interface AttendancePayload {
     permission: number;
     unauthorized: number;
     medical: number;
+    exam: number;
+    unclassified: number;
     attendance_rate: number;
   };
   companies: AttendanceCompanyRow[];
@@ -163,6 +171,8 @@ export interface EmployeeSummary {
   leave_with_permission?: number | null;
   leave_without_permission?: number | null;
   sick_leave?: number | null;
+  exam_leave?: number | null;
+  unclassified_absence?: number | null;
   late_days?: number | null;
   late_hours?: number | null;
   overtime_days?: number | null;
@@ -460,6 +470,20 @@ export interface PurgeCategories {
   logs: boolean;
 }
 
+export type SeasonalThemeId = 'default' | 'new_year' | 'ramadan' | 'emerald';
+
+export interface ReportsAndSheetsConfig {
+  reportSize: 'compact' | 'normal' | 'large';
+  reportOrientation: 'auto' | 'portrait' | 'landscape';
+  tableAlignH: 'center' | 'right' | 'left';
+  tableAlignV: 'middle' | 'top' | 'bottom';
+  pageVerticalAlign: 'top' | 'center';
+  sheetStageBlockRows: number;
+  pdfMaxDatesPerBlock: number;
+  monthDaysCount: 'auto' | '30' | '31';
+  targetPercentageColumn?: string;
+}
+
 export interface SystemSettingsConfig {
   general: {
     systemName: string;
@@ -484,6 +508,8 @@ export interface SystemSettingsConfig {
     allowSupervisorExport: boolean;
     systemNoticeEnabled: boolean;
     systemNoticeText: string;
+    seasonalTheme?: SeasonalThemeId;
+    seasonalDecorEnabled?: boolean;
   };
   departmentsAndLists: {
     companies: string[];
@@ -511,6 +537,7 @@ export interface SystemSettingsConfig {
       reason?: string | null;
     } | null;
   };
+  reportsAndSheets: ReportsAndSheetsConfig;
 }
 
 export interface PublicSystemConfigPayload {
@@ -531,6 +558,8 @@ export interface PublicSystemConfigPayload {
     allowSupervisorExport: boolean;
     systemNoticeEnabled: boolean;
     systemNoticeText: string;
+    seasonalTheme?: SeasonalThemeId;
+    seasonalDecorEnabled?: boolean;
   };
   departmentsAndLists: {
     companies: string[];
@@ -545,6 +574,7 @@ export interface PublicSystemConfigPayload {
     payrollPortalUrl: string;
     workRegulationsUrl: string;
   };
+  reportsAndSheets?: ReportsAndSheetsConfig;
 }
 
 export interface DatabaseMonthSummary {

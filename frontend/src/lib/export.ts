@@ -5,10 +5,31 @@ import type {
   AttendancePayload,
   EmployeeRecord,
   ReportResult,
+  ReportsAndSheetsConfig,
   RequestItem,
 } from '@/types/iems';
 import { IEMS_LOGO_PDF_HTML } from '@/components/shared/IemsLogo';
+import {
+  DEFAULT_REPORTS_AND_SHEETS_CONFIG,
+  normalizeReportsAndSheetsConfig,
+  resolveReportsAndSheetsConfig,
+  setCachedReportsAndSheetsConfig,
+} from './systemConfig';
 import { fmtDate, fmtDateTime, fmtPercent, weekdayArabic } from './format';
+
+let customReportOverride: ReportsAndSheetsConfig | null = null;
+
+export function setReportCustomization(
+  cfg?: Partial<ReportsAndSheetsConfig> | null
+) {
+  customReportOverride = cfg ? normalizeReportsAndSheetsConfig(cfg) : null;
+  setCachedReportsAndSheetsConfig(cfg);
+}
+
+async function getEffectiveReportCfg(): Promise<ReportsAndSheetsConfig> {
+  if (customReportOverride) return customReportOverride;
+  return resolveReportsAndSheetsConfig();
+}
 
 function escHtml(v: unknown): string {
   return String(v ?? '').replace(/[&<>"']/g, (c) => {
@@ -111,8 +132,37 @@ interface PdfSectionSpec {
   rows: (string | number)[][];
 }
 
-function cellSpanHtml(v: unknown, extraStyle = ''): string {
-  return `<div dir="auto" style="display:flex;align-items:center;justify-content:center;width:100%;min-height:18px;margin:0 auto;text-align:center;line-height:1.25;${extraStyle}">${escHtml(v)}</div>`;
+function alignCssMapping(cfg: ReportsAndSheetsConfig) {
+  const justifyH =
+    cfg.tableAlignH === 'left'
+      ? 'flex-start'
+      : cfg.tableAlignH === 'right'
+        ? 'flex-end'
+        : 'center';
+  const textAlignH = cfg.tableAlignH;
+  const alignV =
+    cfg.tableAlignV === 'top'
+      ? 'flex-start'
+      : cfg.tableAlignV === 'bottom'
+        ? 'flex-end'
+        : 'center';
+  const vAlignTd = cfg.tableAlignV;
+  const sizeCls =
+    cfg.reportSize === 'compact'
+      ? ' pr-size-compact'
+      : cfg.reportSize === 'large'
+        ? ' pr-size-large'
+        : '';
+  return { justifyH, textAlignH, alignV, vAlignTd, sizeCls };
+}
+
+function cellSpanHtml(
+  v: unknown,
+  cfg: ReportsAndSheetsConfig,
+  extraStyle = ''
+): string {
+  const { justifyH, textAlignH, alignV } = alignCssMapping(cfg);
+  return `<div dir="ltr" style="display:flex;align-items:${alignV};justify-content:${justifyH};width:100%;min-height:22px;text-align:${textAlignH};line-height:1.25;${extraStyle}"><span dir="auto">${escHtml(v)}</span></div>`;
 }
 
 function buildArmsPageChromeHtml(
@@ -124,10 +174,12 @@ function buildArmsPageChromeHtml(
   pageCount: number,
   sheetWidthPx: number,
   orientation: 'portrait' | 'landscape',
+  cfg: ReportsAndSheetsConfig,
   minHeightPx?: number
 ): string {
   const heightStyle = minHeightPx ? `min-height:${minHeightPx}px;` : '';
   const landscapeCls = orientation === 'landscape' ? ' pr-landscape' : '';
+  const { sizeCls } = alignCssMapping(cfg);
   const headerAndMeta = `<div class="pr-header">
       <div class="pr-header-left"><img src="/logo.png" alt="Intercom" crossorigin="anonymous"></div>
       <div class="pr-header-center"><h1>${escHtml(title)}</h1>${subtitle ? `<span>${escHtml(subtitle)}</span>` : ''}</div>
@@ -143,20 +195,25 @@ function buildArmsPageChromeHtml(
     </div>
     <div class="pr-divider"></div>`;
   const mainContent =
-    pageCount === 1
-      ? `<div style="flex:1;display:flex;flex-direction:column;justify-content:center;width:100%;margin:0 auto;">${headerAndMeta}<div>${bodyHtml}</div></div>`
-      : `${headerAndMeta}<div style="flex:1;width:100%;margin:0 auto;">${bodyHtml}</div>`;
-  return `<div class="pr-sheet pr-page${landscapeCls}" dir="ltr" style="width:${sheetWidthPx}px;${heightStyle}">
+    pageCount === 1 && cfg.pageVerticalAlign === 'center'
+      ? `<div style="flex:1;display:flex;flex-direction:column;justify-content:center;width:100%;">${headerAndMeta}<div>${bodyHtml}</div></div>`
+      : `${headerAndMeta}<div style="flex:1;width:100%;">${bodyHtml}</div>`;
+  return `<div class="pr-sheet pr-page${landscapeCls}${sizeCls}" dir="ltr" style="width:${sheetWidthPx}px;${heightStyle}">
     ${mainContent}
     <div class="pr-footer"><span>Intercom IEMS</span><span>Page ${pageNum} of ${pageCount}</span></div>
   </div>`;
 }
 
-function buildArmsTableHtml(columns: PdfTableColumn[], rows: (string | number)[][]): string {
+function buildArmsTableHtml(
+  columns: PdfTableColumn[],
+  rows: (string | number)[][],
+  cfg: ReportsAndSheetsConfig
+): string {
+  const { textAlignH, vAlignTd } = alignCssMapping(cfg);
   const thead = `<thead><tr>${columns
     .map((c) => {
       const wStyle = c.width ? `width:${c.width};` : '';
-      return `<th style="${wStyle}text-align:center;vertical-align:middle">${cellSpanHtml(c.label)}</th>`;
+      return `<th style="${wStyle}text-align:${textAlignH};vertical-align:${vAlignTd}">${cellSpanHtml(c.label, cfg)}</th>`;
     })
     .join('')}</tr></thead>`;
   const tbody = `<tbody>${rows
@@ -165,7 +222,7 @@ function buildArmsTableHtml(columns: PdfTableColumn[], rows: (string | number)[]
         `<tr>${r
           .map((cell, cIdx) => {
             const boldStyle = columns[cIdx]?.bold ? 'font-weight:700;color:#0F172A;' : '';
-            return `<td style="text-align:center;vertical-align:middle;${boldStyle}">${cellSpanHtml(cell, boldStyle)}</td>`;
+            return `<td style="text-align:${textAlignH};vertical-align:${vAlignTd};${boldStyle}">${cellSpanHtml(cell, cfg, boldStyle)}</td>`;
           })
           .join('')}</tr>`
     )
@@ -180,8 +237,15 @@ async function generatePaginatedArmsPdf(options: {
   orientation: 'portrait' | 'landscape';
   filename: string;
   sections: PdfSectionSpec[];
+  reportCfg?: ReportsAndSheetsConfig;
 }) {
-  const { title, subtitle, metaItems, orientation, filename, sections } = options;
+  const cfg = options.reportCfg || DEFAULT_REPORTS_AND_SHEETS_CONFIG;
+  const effectiveOrientation: 'portrait' | 'landscape' =
+    cfg.reportOrientation === 'portrait' || cfg.reportOrientation === 'landscape'
+      ? cfg.reportOrientation
+      : options.orientation;
+  const { title, subtitle, metaItems, filename, sections } = options;
+  const orientation = effectiveOrientation;
   const sheetWidthPx = orientation === 'landscape' ? 1123 : 794;
 
   const root = document.createElement('div');
@@ -222,7 +286,7 @@ async function generatePaginatedArmsPdf(options: {
 
       if (sec.rows.length === 0) {
         pageDefs.push({
-          bodyHtml: `${headingHtml}${buildArmsTableHtml(sec.columns, [])}`,
+          bodyHtml: `${headingHtml}${buildArmsTableHtml(sec.columns, [], cfg)}`,
         });
         continue;
       }
@@ -232,11 +296,12 @@ async function generatePaginatedArmsPdf(options: {
           title,
           subtitle,
           metaItems,
-          `${headingHtml}${buildArmsTableHtml(sec.columns, [])}`,
+          `${headingHtml}${buildArmsTableHtml(sec.columns, [], cfg)}`,
           1,
           1,
           sheetWidthPx,
-          orientation
+          orientation,
+          cfg
         )
       );
       const sampleRows = sec.rows.slice(0, Math.min(8, sec.rows.length));
@@ -245,11 +310,12 @@ async function generatePaginatedArmsPdf(options: {
           title,
           subtitle,
           metaItems,
-          `${headingHtml}${buildArmsTableHtml(sec.columns, sampleRows)}`,
+          `${headingHtml}${buildArmsTableHtml(sec.columns, sampleRows, cfg)}`,
           1,
           1,
           sheetWidthPx,
-          orientation
+          orientation,
+          cfg
         )
       );
       const avgRowH = Math.max(20, (sampleH - emptyH) / sampleRows.length);
@@ -268,18 +334,19 @@ async function generatePaginatedArmsPdf(options: {
               title,
               subtitle,
               metaItems,
-              `${headingHtml}${buildArmsTableHtml(sec.columns, sec.rows.slice(cursor, cursor + count))}`,
+              `${headingHtml}${buildArmsTableHtml(sec.columns, sec.rows.slice(cursor, cursor + count), cfg)}`,
               1,
               1,
               sheetWidthPx,
-              orientation
+              orientation,
+              cfg
             )
           );
           if (h <= targetSheetHeightPx) break;
           count -= 1;
         }
         pageDefs.push({
-          bodyHtml: `${headingHtml}${buildArmsTableHtml(sec.columns, sec.rows.slice(cursor, cursor + count))}`,
+          bodyHtml: `${headingHtml}${buildArmsTableHtml(sec.columns, sec.rows.slice(cursor, cursor + count), cfg)}`,
         });
         cursor += count;
       }
@@ -297,6 +364,7 @@ async function generatePaginatedArmsPdf(options: {
           totalPages,
           sheetWidthPx,
           orientation,
+          cfg,
           targetSheetHeightPx
         )
       )
@@ -320,12 +388,16 @@ async function generatePaginatedArmsPdf(options: {
       const imgW = usableW;
       const imgH = (canvas.height * imgW) / canvas.width;
       const scale = Math.min(1, usableH / imgH);
+      const drawY =
+        cfg.pageVerticalAlign === 'center'
+          ? margin + (usableH - imgH * scale) / 2
+          : margin;
       if (i > 0) pdf.addPage();
       pdf.addImage(
         canvas.toDataURL('image/jpeg', 0.96),
         'JPEG',
         margin + (usableW - imgW * scale) / 2,
-        margin + (usableH - imgH * scale) / 2,
+        drawY,
         imgW * scale,
         imgH * scale
       );
@@ -347,8 +419,12 @@ export function exportAttendanceExcel(data: AttendancePayload) {
     ['إجمالي الموظفين', data.totals.employee_count],
     ['الحضور', data.totals.present],
     ['الغياب', data.totals.absent],
+    ['إجازة عارضة', data.totals.casual],
+    ['إجازة بإذن', data.totals.permission],
     ['غياب بدون إذن', data.totals.unauthorized],
-    ['مرضي', data.totals.medical],
+    ['إجازة مرضي', data.totals.medical],
+    ['إجازة امتحان', data.totals.exam ?? 0],
+    ['غير مصنف', data.totals.unclassified ?? 0],
     ['نسبة الحضور', `${Number(data.totals.attendance_rate || 0).toFixed(1)}%`],
   ];
   const companies: unknown[][] = [
@@ -371,7 +447,7 @@ export function exportAttendanceExcel(data: AttendancePayload) {
     }),
   ];
   const employees: unknown[][] = [
-    ['الموظف', 'ID', 'الشركة', 'الشيفت', 'المرحلة', 'إجمالي الحضور', 'إجمالي الغياب', 'إجازة عارضة', 'إجازة بإذن', 'إجازة بدون إذن', 'إجازة مرضي', 'نسبة الحضور'],
+    ['الموظف', 'ID', 'الشركة', 'الشيفت', 'المرحلة', 'إجمالي الحضور', 'إجمالي الغياب', 'إجازة عارضة', 'إجازة بإذن', 'إجازة بدون إذن', 'إجازة مرضي', 'إجازة امتحان', 'غير مصنف', 'نسبة الحضور'],
     ...(data.employees || []).map((r) => [
       r.name,
       r.id,
@@ -384,11 +460,13 @@ export function exportAttendanceExcel(data: AttendancePayload) {
       r.permission,
       r.unauthorized,
       r.medical,
+      r.exam ?? 0,
+      r.unclassified ?? 0,
       `${(+r.attendance_rate || 0).toFixed(1)}%`,
     ]),
   ];
   const daily: unknown[][] = [
-    ['التاريخ', 'اليوم', 'الإجمالي الحضور', 'إجمالي الغياب', 'إجازة عارضة', 'إجازة بإذن', 'إجازة بدون إذن', 'إجازة مرضي', 'نسبة الحضور'],
+    ['التاريخ', 'اليوم', 'الإجمالي الحضور', 'إجمالي الغياب', 'إجازة عارضة', 'إجازة بإذن', 'إجازة بدون إذن', 'إجازة مرضي', 'إجازة امتحان', 'غير مصنف', 'نسبة الحضور'],
     ...(data.daily || []).map((r) => [
       fmtDate(r.date),
       weekdayArabic(r.date),
@@ -398,6 +476,8 @@ export function exportAttendanceExcel(data: AttendancePayload) {
       r.permission,
       r.unauthorized,
       r.medical,
+      r.exam ?? 0,
+      r.unclassified ?? 0,
       `${(+r.attendance_rate || 0).toFixed(1)}%`,
     ]),
   ];
@@ -416,22 +496,31 @@ export function exportAttendanceExcel(data: AttendancePayload) {
 }
 
 export async function exportAttendancePdf(data: AttendancePayload, preparedBy = '—') {
+  const reportCfg = await getEffectiveReportCfg();
   const generatedAt = enPrintTimestamp();
 
   const summaryCols: PdfTableColumn[] = [
     { label: 'Total Employees', bold: true },
     { label: 'Total Present', bold: true },
     { label: 'Total Absent' },
+    { label: 'Casual' },
+    { label: 'Permission' },
     { label: 'Unauthorized' },
     { label: 'Medical' },
+    { label: 'Exam' },
+    { label: 'Unclassified' },
     { label: 'Attendance %', bold: true },
   ];
   const summaryRows: (string | number)[][] = [[
     fmtEnNum(data.totals.employee_count),
     fmtEnNum(data.totals.present),
     fmtEnNum(data.totals.absent),
+    fmtEnNum(data.totals.casual),
+    fmtEnNum(data.totals.permission),
     fmtEnNum(data.totals.unauthorized),
     fmtEnNum(data.totals.medical),
+    fmtEnNum(data.totals.exam ?? 0),
+    fmtEnNum(data.totals.unclassified ?? 0),
     `${Number(data.totals.attendance_rate || 0).toFixed(1)}%`,
   ]];
 
@@ -464,19 +553,21 @@ export async function exportAttendancePdf(data: AttendancePayload, preparedBy = 
   });
 
   const empCols: PdfTableColumn[] = [
-    { label: '#', width: '38px' },
+    { label: '#', width: '34px' },
     { label: 'Employee', bold: true },
-    { label: 'ID', width: '64px' },
-    { label: 'Company', width: '110px' },
-    { label: 'Shift', width: '54px' },
+    { label: 'ID', width: '58px' },
+    { label: 'Company', width: '98px' },
+    { label: 'Shift', width: '48px' },
     { label: 'Stage' },
-    { label: 'Present', width: '64px' },
-    { label: 'Absent', width: '64px' },
-    { label: 'Casual', width: '60px' },
-    { label: 'Permission', width: '74px' },
-    { label: 'Unauth', width: '62px' },
-    { label: 'Medical', width: '62px' },
-    { label: '%', width: '60px', bold: true },
+    { label: 'Present', width: '56px' },
+    { label: 'Absent', width: '56px' },
+    { label: 'Casual', width: '52px' },
+    { label: 'Perm', width: '52px' },
+    { label: 'Unauth', width: '54px' },
+    { label: 'Medical', width: '56px' },
+    { label: 'Exam', width: '50px' },
+    { label: 'Unclassified', width: '64px' },
+    { label: '%', width: '52px', bold: true },
   ];
   const empRows = (data.employees || []).map((r, i) => [
     i + 1,
@@ -491,6 +582,8 @@ export async function exportAttendancePdf(data: AttendancePayload, preparedBy = 
     fmtEnNum(r.permission),
     fmtEnNum(r.unauthorized),
     fmtEnNum(r.medical),
+    fmtEnNum(r.exam ?? 0),
+    fmtEnNum(r.unclassified ?? 0),
     `${Number(r.attendance_rate || 0).toFixed(1)}%`,
   ]);
 
@@ -502,6 +595,8 @@ export async function exportAttendancePdf(data: AttendancePayload, preparedBy = 
     { label: 'Permission' },
     { label: 'Unauthorized' },
     { label: 'Medical' },
+    { label: 'Exam' },
+    { label: 'Unclassified' },
     { label: '%', bold: true },
   ];
   const dailyRows = (data.daily || []).map((r) => [
@@ -512,6 +607,8 @@ export async function exportAttendancePdf(data: AttendancePayload, preparedBy = 
     fmtEnNum(r.permission),
     fmtEnNum(r.unauthorized),
     fmtEnNum(r.medical),
+    fmtEnNum(r.exam ?? 0),
+    fmtEnNum(r.unclassified ?? 0),
     `${Number(r.attendance_rate || 0).toFixed(1)}%`,
   ]);
 
@@ -542,6 +639,7 @@ export async function exportAttendancePdf(data: AttendancePayload, preparedBy = 
     orientation: 'landscape',
     filename: `IEMS_Attendance_${data.range.from}_${data.range.to}.pdf`,
     sections,
+    reportCfg,
   });
 }
 
@@ -599,6 +697,7 @@ export async function exportEmployeeDetailPdf(
   payload: EmployeeExportPayload,
   preparedBy = '—'
 ) {
+  const reportCfg = await getEffectiveReportCfg();
   const generatedAt = enPrintTimestamp();
   const rangeLabel =
     payload.from || payload.to
@@ -614,10 +713,10 @@ export async function exportEmployeeDetailPdf(
   };
   const fmtDateShort = (d: string) => (d.length >= 10 ? `${d.slice(8, 10)}/${d.slice(5, 7)}` : d);
 
-  const MAX_DATES_PER_BLOCK = 15;
+  const maxDatesPerBlock = Math.min(31, Math.max(8, reportCfg.pdfMaxDatesPerBlock || 16));
   const dateChunks: string[][] = [];
-  for (let i = 0; i < payload.dates.length; i += MAX_DATES_PER_BLOCK) {
-    dateChunks.push(payload.dates.slice(i, i + MAX_DATES_PER_BLOCK));
+  for (let i = 0; i < payload.dates.length; i += maxDatesPerBlock) {
+    dateChunks.push(payload.dates.slice(i, i + maxDatesPerBlock));
   }
   if (!dateChunks.length) dateChunks.push([]);
 
@@ -668,6 +767,7 @@ export async function exportEmployeeDetailPdf(
     orientation: 'landscape',
     filename: `IEMS_Employee_${payload.employee.id}_${payload.from || 'all'}_${payload.to || 'all'}.pdf`,
     sections,
+    reportCfg,
   });
 }
 
@@ -702,6 +802,7 @@ export function exportReportExcel(result: ReportResult) {
 }
 
 export async function exportReportPdf(result: ReportResult, preparedBy: string) {
+  const reportCfg = await getEffectiveReportCfg();
   const stageName = Array.isArray(result.stage) ? result.stage.join(' + ') : result.stage || 'Stage';
   const totalEmployees = Number(result.total) || result.employees.length;
   const totalAchievedSum = result.employees.reduce((acc, e) => acc + (Number(e.stage_target) || 0), 0);
@@ -742,6 +843,7 @@ export async function exportReportPdf(result: ReportResult, preparedBy: string) 
     orientation: 'portrait',
     filename: `IEMS_Report_${stageFile}_${result.from}_to_${result.to}.pdf`,
     sections: [{ columns, rows }],
+    reportCfg,
   });
 }
 
@@ -774,6 +876,7 @@ export async function exportDepartedPdf(
   filterSummaryText: string,
   preparedBy = '—'
 ) {
+  const reportCfg = await getEffectiveReportCfg();
   const stamp = new Date().toISOString().slice(0, 10);
   const generatedAt = enPrintTimestamp();
 
@@ -812,6 +915,7 @@ export async function exportDepartedPdf(
     orientation: 'landscape',
     filename: `iems-left-employees_${stamp}.pdf`,
     sections: [{ columns, rows: tableRows }],
+    reportCfg,
   });
 }
 

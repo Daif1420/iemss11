@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import {
   AlertCircle,
@@ -38,6 +39,7 @@ import {
 import { useAuth } from '@/context/AuthContext';
 import { api, apiUploadWithProgress, ApiError } from '@/lib/api';
 import { fmtDateTime, fmtNumber } from '@/lib/format';
+import { normalizeReportsAndSheetsConfig } from '@/lib/systemConfig';
 import { cn } from '@/lib/utils';
 import type { ImportHistoryRow } from '@/types/iems';
 
@@ -74,7 +76,8 @@ function formatSize(bytes: number): string {
 }
 
 export function ImportPage() {
-  const { isCreator } = useAuth();
+  const { isCreator, publicConfig } = useAuth();
+  const sheetCfg = normalizeReportsAndSheetsConfig(publicConfig?.reportsAndSheets);
 
   // Master sheet import state
   const masterInputRef = useRef<HTMLInputElement | null>(null);
@@ -434,6 +437,44 @@ export function ImportPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-secondary/30 px-3.5 py-2 text-xs">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground">
+                <span>
+                  حجم بلوك المراحل بالملف:{' '}
+                  <strong className="text-foreground tabular-nums">
+                    {sheetCfg.sheetStageBlockRows} صف
+                  </strong>
+                </span>
+                <span>
+                  طول الشهر المعتمد:{' '}
+                  <strong className="text-foreground">
+                    {sheetCfg.monthDaysCount === 'auto'
+                      ? 'تلقائي (28–31 يوم)'
+                      : `${sheetCfg.monthDaysCount} يوماً`}
+                  </strong>
+                </span>
+                <span>
+                  عمود نسبة التارجت:{' '}
+                  <strong className="text-foreground">
+                    {!sheetCfg.targetPercentageColumn || sheetCfg.targetPercentageColumn === 'auto'
+                      ? 'تلقائي حسب آخر تاريخ'
+                      : sheetCfg.targetPercentageColumn}
+                  </strong>
+                </span>
+                <span className="text-[11px]">
+                  (يتم إخفاء الأيام الفارغة أو الصفرية تلقائياً لعرض البيانات حتى آخر يوم تشغيل فعلي)
+                </span>
+              </div>
+              {isCreator && (
+                <Link
+                  to="/settings.html"
+                  className="font-bold text-primary hover:underline shrink-0"
+                >
+                  تعديل من إعدادات النظام
+                </Link>
+              )}
+            </div>
+
             <div
               onDragEnter={(e) => {
                 e.preventDefault();
@@ -464,7 +505,19 @@ export function ImportPage() {
                   : 'border-border bg-secondary/20 hover:bg-secondary/40'
               )}
             >
-              <UploadCloud className="h-8 w-8 text-primary mb-2" />
+              <div
+                className={cn(
+                  'relative mb-3 flex h-14 w-14 items-center justify-center rounded-2xl border transition-transform',
+                  dragActive
+                    ? 'scale-105 border-primary/40 bg-primary/15 text-primary'
+                    : 'border-emerald-600/25 bg-emerald-600/10 text-emerald-700 dark:text-emerald-400'
+                )}
+              >
+                <FileSpreadsheet className="h-7 w-7" />
+                <span className="absolute -bottom-1 -left-1 flex h-5 w-5 items-center justify-center rounded-full border border-card bg-primary text-primary-foreground shadow-xs">
+                  <UploadCloud className="h-3 w-3" />
+                </span>
+              </div>
               <p className="text-sm font-bold text-foreground">
                 اسحب ملفات Excel هنا أو اضغط للاختيار
               </p>
@@ -494,7 +547,7 @@ export function ImportPage() {
                       className="flex items-center justify-between gap-3 px-3.5 py-2.5 text-sm"
                     >
                       <div className="flex items-center gap-2 min-w-0">
-                        <FileSpreadsheet className="h-4 w-4 text-primary shrink-0" />
+                        <FileSpreadsheet className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
                         <span className="font-semibold truncate">{f.name}</span>
                         <span className="text-xs text-muted-foreground tabular-nums shrink-0">
                           {formatSize(f.size)}
@@ -518,15 +571,59 @@ export function ImportPage() {
               </div>
             )}
 
-            {(uploadingMaster || masterProgress > 0) && (
-              <div className="space-y-1.5 rounded-lg border border-border bg-secondary/20 p-3">
-                <div className="flex items-center justify-between text-xs font-semibold">
-                  <span>{masterProgressLabel}</span>
-                  <span className="tabular-nums">{masterProgress}%</span>
-                </div>
-                <Progress value={masterProgress} />
+            {/* Enhanced Multi-Stage Upload Progress Bar */}
+            <div className="space-y-2 rounded-lg border border-border bg-secondary/20 p-3.5">
+              <div className="flex items-center justify-between gap-2 text-xs font-semibold">
+                <span className="text-foreground">
+                  {uploadingMaster || masterProgress > 0
+                    ? masterProgressLabel || 'جارٍ التحديث...'
+                    : selectedFiles.length > 0
+                      ? `جاهز لرفع ${selectedFiles.length} ملف — اضغط "رفع وتحديث البيانات"`
+                      : 'شريط تقدم الرفع والمعالجة (في انتظار اختيار ملف Excel)'}
+                </span>
+                <span
+                  className={cn(
+                    'tabular-nums font-extrabold',
+                    masterStatus?.kind === 'error'
+                      ? 'text-destructive'
+                      : masterProgress >= 100
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : 'text-primary'
+                  )}
+                >
+                  {masterProgress}%
+                </span>
               </div>
-            )}
+              <Progress
+                value={masterProgress}
+                className={cn(
+                  'h-3',
+                  masterStatus?.kind === 'error'
+                    ? '[&>div]:bg-destructive'
+                    : masterProgress >= 100
+                      ? '[&>div]:bg-emerald-600 dark:[&>div]:bg-emerald-500'
+                      : ''
+                )}
+              />
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                <span className={cn(masterProgress >= 10 && 'font-bold text-foreground')}>
+                  1. قراءة الشيت
+                </span>
+                <span className={cn(masterProgress >= 35 && 'font-bold text-foreground')}>
+                  2. رفع الملف
+                </span>
+                <span className={cn(masterProgress >= 65 && 'font-bold text-foreground')}>
+                  3. معالجة البيانات
+                </span>
+                <span
+                  className={cn(
+                    masterProgress >= 100 && 'font-bold text-emerald-600 dark:text-emerald-400'
+                  )}
+                >
+                  4. اكتمل الحفظ
+                </span>
+              </div>
+            </div>
 
             {masterStatus && (
               <div

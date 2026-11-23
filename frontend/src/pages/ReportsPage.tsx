@@ -28,6 +28,7 @@ import { useAuth } from '@/context/AuthContext';
 import { api, ApiError } from '@/lib/api';
 import { exportReportExcel, exportReportPdf } from '@/lib/export';
 import { fmtDecimal, fmtNumber, fmtPercent, payrollCycle } from '@/lib/format';
+import { normalizeReportsAndSheetsConfig } from '@/lib/systemConfig';
 import { cn } from '@/lib/utils';
 import type {
   DashboardPayload,
@@ -56,7 +57,7 @@ function fmtEnNum(val?: number | null) {
 }
 
 export function ReportsPage() {
-  const { user, isAdminUp } = useAuth();
+  const { user, isAdminUp, publicConfig: authPublicConfig } = useAuth();
   const navigate = useNavigate();
 
   const [stages, setStages] = useState<string[]>([]);
@@ -84,7 +85,55 @@ export function ReportsPage() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [publicConfig, setPublicConfig] = useState<PublicSystemConfigPayload | null>(null);
 
-  const canExport = isAdminUp || (publicConfig?.displayAndFeatures?.allowSupervisorExport ?? true);
+  const activePublicConfig = authPublicConfig ?? publicConfig;
+  const reportCfg = useMemo(
+    () => normalizeReportsAndSheetsConfig(activePublicConfig?.reportsAndSheets),
+    [activePublicConfig]
+  );
+
+  const canExport = isAdminUp || (activePublicConfig?.displayAndFeatures?.allowSupervisorExport ?? true);
+  const previewTextAlign =
+    reportCfg.tableAlignH === 'left'
+      ? 'text-left'
+      : reportCfg.tableAlignH === 'right'
+        ? 'text-right'
+        : 'text-center';
+  const previewJustifyAlign =
+    reportCfg.tableAlignH === 'left'
+      ? 'justify-start'
+      : reportCfg.tableAlignH === 'right'
+        ? 'justify-end'
+        : 'justify-center';
+  const previewVertAlign =
+    reportCfg.tableAlignV === 'top'
+      ? 'align-top'
+      : reportCfg.tableAlignV === 'bottom'
+        ? 'align-bottom'
+        : 'align-middle';
+  const sheetPadClass =
+    reportCfg.reportSize === 'compact'
+      ? 'p-4 sm:p-5'
+      : reportCfg.reportSize === 'large'
+        ? 'p-6 sm:p-10'
+        : 'p-5 sm:p-8';
+  const previewTableTextClass =
+    reportCfg.reportSize === 'compact'
+      ? 'text-[10px]'
+      : reportCfg.reportSize === 'large'
+        ? 'text-xs'
+        : 'text-[11px]';
+  const previewThPadClass =
+    reportCfg.reportSize === 'compact'
+      ? 'py-1.5 px-1.5'
+      : reportCfg.reportSize === 'large'
+        ? 'py-2.5 px-2.5'
+        : 'py-2 px-2';
+  const previewTdPadClass =
+    reportCfg.reportSize === 'compact'
+      ? 'py-1 px-1.5'
+      : reportCfg.reportSize === 'large'
+        ? 'py-2 px-2.5'
+        : 'py-1.5 px-2';
 
   const minDate = availableDates[0] || '';
   const maxDate = availableDates[availableDates.length - 1] || '';
@@ -220,8 +269,9 @@ export function ReportsPage() {
     } else if (kind === 'cycle') {
       const cyc = payrollCycle(
         anchor,
-        publicConfig?.payroll?.cycleStartDay,
-        publicConfig?.payroll?.cycleEndDay
+        activePublicConfig?.payroll?.cycleStartDay,
+        activePublicConfig?.payroll?.cycleEndDay,
+        reportCfg.monthDaysCount
       );
       nextFrom = minDate && cyc.start < minDate ? minDate : cyc.start;
       nextTo = maxDate && cyc.end > maxDate ? maxDate : cyc.end;
@@ -714,7 +764,10 @@ export function ReportsPage() {
                   fontFamily: '"Plus Jakarta Sans", "Cairo", system-ui, sans-serif',
                   fontVariantNumeric: 'normal',
                 }}
-                className="w-full bg-white text-[#0F172A] rounded-md border border-[#CBD5E1] shadow-xs p-5 sm:p-8 print:max-w-none print:border-0 print:shadow-none print:p-0"
+                className={cn(
+                  'w-full bg-white text-[#0F172A] rounded-md border border-[#CBD5E1] shadow-xs print:max-w-none print:border-0 print:shadow-none print:p-0',
+                  sheetPadClass
+                )}
               >
                 {/* 3-Column Header: Intercom Left | Title Center | Balanced IEMS Logo Right */}
                 <div className="grid grid-cols-[112px_1fr_112px] sm:grid-cols-[195px_1fr_195px] items-center pb-1 mb-3.5">
@@ -772,67 +825,116 @@ export function ReportsPage() {
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
-                    <table className="w-full border-collapse text-[11px]">
+                    <table className={cn('w-full border-collapse', previewTableTextClass)}>
                       <thead>
                         <tr className="bg-[#E5E7EB] text-[#111827]">
-                          <th className="border border-[#CBD5E1] py-2 px-2 text-center align-middle font-bold w-10">
+                          <th
+                            className={cn(
+                              'border border-[#CBD5E1] font-bold w-10',
+                              previewThPadClass,
+                              previewTextAlign,
+                              previewVertAlign
+                            )}
+                          >
                             #
                           </th>
-                          <th className="border border-[#CBD5E1] py-2 px-2.5 text-center align-middle font-bold">
+                          <th
+                            className={cn(
+                              'border border-[#CBD5E1] font-bold',
+                              previewThPadClass,
+                              previewTextAlign,
+                              previewVertAlign
+                            )}
+                          >
                             <button
                               type="button"
                               onClick={() => toggleSort('name')}
-                              className="w-full inline-flex items-center justify-center gap-1 cursor-pointer hover:underline"
+                              className={cn('w-full inline-flex items-center gap-1 cursor-pointer hover:underline', previewJustifyAlign)}
                             >
                               <span>Employee</span>
                               <ArrowUpDown className="h-3 w-3 opacity-60 no-print" />
                             </button>
                           </th>
-                          <th className="border border-[#CBD5E1] py-2 px-2 text-center align-middle font-bold">
+                          <th
+                            className={cn(
+                              'border border-[#CBD5E1] font-bold',
+                              previewThPadClass,
+                              previewTextAlign,
+                              previewVertAlign
+                            )}
+                          >
                             <button
                               type="button"
                               onClick={() => toggleSort('company')}
-                              className="w-full inline-flex items-center justify-center gap-1 cursor-pointer hover:underline"
+                              className={cn('w-full inline-flex items-center gap-1 cursor-pointer hover:underline', previewJustifyAlign)}
                             >
                               <span>Company</span>
                               <ArrowUpDown className="h-3 w-3 opacity-60 no-print" />
                             </button>
                           </th>
-                          <th className="border border-[#CBD5E1] py-2 px-2 text-center align-middle font-bold w-14">
+                          <th
+                            className={cn(
+                              'border border-[#CBD5E1] font-bold w-14',
+                              previewThPadClass,
+                              previewTextAlign,
+                              previewVertAlign
+                            )}
+                          >
                             <button
                               type="button"
                               onClick={() => toggleSort('shift')}
-                              className="w-full inline-flex items-center justify-center gap-1 cursor-pointer hover:underline"
+                              className={cn('w-full inline-flex items-center gap-1 cursor-pointer hover:underline', previewJustifyAlign)}
                             >
                               <span>Shift</span>
                               <ArrowUpDown className="h-3 w-3 opacity-60 no-print" />
                             </button>
                           </th>
-                          <th className="border border-[#CBD5E1] py-2 px-2 text-center align-middle font-bold w-24">
+                          <th
+                            className={cn(
+                              'border border-[#CBD5E1] font-bold w-24',
+                              previewThPadClass,
+                              previewTextAlign,
+                              previewVertAlign
+                            )}
+                          >
                             <button
                               type="button"
                               onClick={() => toggleSort('stage_target')}
-                              className="w-full inline-flex items-center justify-center gap-1 cursor-pointer hover:underline"
+                              className={cn('w-full inline-flex items-center gap-1 cursor-pointer hover:underline', previewJustifyAlign)}
                             >
                               <span>Achieved</span>
                               <ArrowUpDown className="h-3 w-3 opacity-60 no-print" />
                             </button>
                           </th>
-                          <th className="border border-[#CBD5E1] py-2 px-2 text-center align-middle font-bold w-20">
+                          <th
+                            className={cn(
+                              'border border-[#CBD5E1] font-bold w-20',
+                              previewThPadClass,
+                              previewTextAlign,
+                              previewVertAlign
+                            )}
+                          >
                             <button
                               type="button"
                               onClick={() => toggleSort('sheet_target')}
-                              className="w-full inline-flex items-center justify-center gap-1 cursor-pointer hover:underline"
+                              className={cn('w-full inline-flex items-center gap-1 cursor-pointer hover:underline', previewJustifyAlign)}
                             >
                               <span>Target</span>
                               <ArrowUpDown className="h-3 w-3 opacity-60 no-print" />
                             </button>
                           </th>
-                          <th className="border border-[#CBD5E1] py-2 px-2 text-center align-middle font-bold w-16">
+                          <th
+                            className={cn(
+                              'border border-[#CBD5E1] font-bold w-16',
+                              previewThPadClass,
+                              previewTextAlign,
+                              previewVertAlign
+                            )}
+                          >
                             <button
                               type="button"
                               onClick={() => toggleSort('achievement_pct')}
-                              className="w-full inline-flex items-center justify-center gap-1 cursor-pointer hover:underline"
+                              className={cn('w-full inline-flex items-center gap-1 cursor-pointer hover:underline', previewJustifyAlign)}
                             >
                               <span>%</span>
                               <ArrowUpDown className="h-3 w-3 opacity-60 no-print" />
@@ -848,30 +950,79 @@ export function ReportsPage() {
                               key={emp.id}
                               className={idx % 2 === 1 ? 'bg-[#F4F7FA]' : 'bg-white'}
                             >
-                              <td className="border border-[#CBD5E1] py-1.5 px-2 text-center align-middle font-semibold text-[#1E293B]">
+                              <td
+                                className={cn(
+                                  'border border-[#CBD5E1] font-semibold text-[#1E293B]',
+                                  previewTdPadClass,
+                                  previewTextAlign,
+                                  previewVertAlign
+                                )}
+                              >
                                 {idx + 1}
                               </td>
-                              <td className="border border-[#CBD5E1] py-1.5 px-2.5 text-center align-middle font-semibold text-[#0F172A]">
+                              <td
+                                className={cn(
+                                  'border border-[#CBD5E1] font-semibold text-[#0F172A]',
+                                  previewTdPadClass,
+                                  previewTextAlign,
+                                  previewVertAlign
+                                )}
+                              >
                                 <Link
                                   to={`/employee.html?id=${emp.id}`}
-                                  className="inline-flex items-center justify-center hover:underline"
+                                  className={cn('inline-flex w-full items-center hover:underline', previewJustifyAlign)}
                                 >
                                   {emp.name}
                                 </Link>
                               </td>
-                              <td className="border border-[#CBD5E1] py-1.5 px-2 text-center align-middle text-[#1E293B]">
+                              <td
+                                className={cn(
+                                  'border border-[#CBD5E1] text-[#1E293B]',
+                                  previewTdPadClass,
+                                  previewTextAlign,
+                                  previewVertAlign
+                                )}
+                              >
                                 {emp.company || '—'}
                               </td>
-                              <td className="border border-[#CBD5E1] py-1.5 px-2 text-center align-middle text-[#1E293B]">
+                              <td
+                                className={cn(
+                                  'border border-[#CBD5E1] text-[#1E293B]',
+                                  previewTdPadClass,
+                                  previewTextAlign,
+                                  previewVertAlign
+                                )}
+                              >
                                 {emp.shift || '—'}
                               </td>
-                              <td className="border border-[#CBD5E1] py-1.5 px-2 text-center align-middle font-bold text-[#0F172A]">
+                              <td
+                                className={cn(
+                                  'border border-[#CBD5E1] font-bold text-[#0F172A]',
+                                  previewTdPadClass,
+                                  previewTextAlign,
+                                  previewVertAlign
+                                )}
+                              >
                                 {fmtEnNum(emp.stage_target)}
                               </td>
-                              <td className="border border-[#CBD5E1] py-1.5 px-2 text-center align-middle text-[#1E293B]">
+                              <td
+                                className={cn(
+                                  'border border-[#CBD5E1] text-[#1E293B]',
+                                  previewTdPadClass,
+                                  previewTextAlign,
+                                  previewVertAlign
+                                )}
+                              >
                                 {emp.sheet_target != null ? fmtEnNum(emp.sheet_target) : '—'}
                               </td>
-                              <td className="border border-[#CBD5E1] py-1.5 px-2 text-center align-middle font-bold text-[#0F172A]">
+                              <td
+                                className={cn(
+                                  'border border-[#CBD5E1] font-bold text-[#0F172A]',
+                                  previewTdPadClass,
+                                  previewTextAlign,
+                                  previewVertAlign
+                                )}
+                              >
                                 {pct != null ? `${Number(pct).toFixed(1)}%` : '—'}
                               </td>
                             </tr>

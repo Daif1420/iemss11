@@ -122,7 +122,8 @@ export function weekdayArabic(dateStr: string): string {
 export function payrollCycle(
   dateStr: string,
   startDay = 21,
-  endDay = 20
+  endDay = 20,
+  monthDaysCount: 'auto' | '30' | '31' = 'auto'
 ): { start: string; end: string; monthKey: string } {
   const sDay = Math.min(28, Math.max(1, Math.round(Number(startDay) || 21)));
   const eDay = Math.min(31, Math.max(1, Math.round(Number(endDay) || 20)));
@@ -133,7 +134,8 @@ export function payrollCycle(
   if (sDay === 1 && eDay >= 28) {
     const start = new Date(Date.UTC(y, m, 1));
     const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
-    const end = new Date(Date.UTC(y, m, Math.min(eDay, lastDay)));
+    const effectiveMax = monthDaysCount === '30' ? Math.min(30, lastDay) : lastDay;
+    const end = new Date(Date.UTC(y, m, Math.min(eDay, effectiveMax)));
     const s = start.toISOString().slice(0, 10);
     return { start: s, end: end.toISOString().slice(0, 10), monthKey: s.slice(0, 7) };
   }
@@ -143,8 +145,10 @@ export function payrollCycle(
   const nextMonthLast = new Date(
     Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 2, 0)
   ).getUTCDate();
+  const effectiveNextMax =
+    monthDaysCount === '30' ? Math.min(30, nextMonthLast) : nextMonthLast;
   const end = new Date(
-    Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, Math.min(eDay, nextMonthLast))
+    Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, Math.min(eDay, effectiveNextMax))
   );
   const s = start.toISOString().slice(0, 10);
   return { start: s, end: end.toISOString().slice(0, 10), monthKey: s.slice(0, 7) };

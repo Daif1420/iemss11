@@ -19,7 +19,7 @@ function list(value) { const a=Array.isArray(value)?value:String(value??'').spli
 function addIn(sql, params, column, values) { if (!values.length) return sql; sql += ` AND ${column} IN (${values.map(()=>'?').join(',')})`; params.push(...values); return sql; }
 
 // Payroll cycle containing `dateStr` (YYYY-MM-DD): configurable cycleStartDay -> cycleEndDay.
-function payrollCycle(dateStr, startDay = 21, endDay = 20) {
+function payrollCycle(dateStr, startDay = 21, endDay = 20, monthDaysCount = 'auto') {
   const sDay = Math.min(28, Math.max(1, Math.round(Number(startDay) || 21)));
   const eDay = Math.min(31, Math.max(1, Math.round(Number(endDay) || 20)));
   const d = new Date(`${dateStr}T00:00:00Z`);
@@ -27,12 +27,14 @@ function payrollCycle(dateStr, startDay = 21, endDay = 20) {
   if (sDay === 1 && eDay >= 28) {
     const start = new Date(Date.UTC(y, m, 1));
     const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
-    const end = new Date(Date.UTC(y, m, Math.min(eDay, lastDay)));
+    const cap = monthDaysCount === '30' ? Math.min(30, lastDay) : lastDay;
+    const end = new Date(Date.UTC(y, m, Math.min(eDay, cap)));
     return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
   }
   const start = new Date(Date.UTC(day >= sDay ? y : (m === 0 ? y - 1 : y), day >= sDay ? m : (m === 0 ? 11 : m - 1), sDay));
   const nextMonthLast = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 2, 0)).getUTCDate();
-  const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, Math.min(eDay, nextMonthLast)));
+  const capNext = monthDaysCount === '30' ? Math.min(30, nextMonthLast) : nextMonthLast;
+  const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, Math.min(eDay, capNext)));
   return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
 }
 
@@ -210,7 +212,10 @@ router.get('/dashboard', requireAuth, async (req, res) => {
   const attendance = (await db.prepare(`
     SELECT
       COALESCE(SUM(CASE WHEN sd.value_num IN (0.5, 1, 1.5) THEN sd.value_num ELSE 0 END), 0) AS present_days,
-      COUNT(CASE WHEN sd.value_num = 0 THEN 1 END) AS absent_days,
+      COUNT(CASE WHEN (
+        (sd.value_num IS NOT NULL AND sd.value_num = 0)
+        OR TRIM(COALESCE(sd.value_text, '')) IN ('0', 'ع', 'ا', 'أ', 'ب', 'م', 'ن')
+      ) THEN 1 END) AS absent_days,
       COUNT(*) AS attendance_entries,
       COUNT(DISTINCT CASE WHEN sd.value_num IN (0.5, 1, 1.5) THEN sd.employee_id || ':' || sd.entry_date END) AS distinct_present_days
     FROM stage_daily sd
@@ -336,7 +341,12 @@ router.get('/:id', requireAuth, async (req, res) => {
     const lastRow = await db.prepare('SELECT MAX(entry_date) AS d FROM stage_daily WHERE employee_id = ?').get(targetId);
     const last = lastRow && lastRow.d ? String(lastRow.d).slice(0, 10) : '';
     if (/^\d{4}-\d{2}-\d{2}$/.test(last)) {
-      const c = payrollCycle(last, sysCfg.payroll?.cycleStartDay, sysCfg.payroll?.cycleEndDay);
+      const c = payrollCycle(
+        last,
+        sysCfg.payroll?.cycleStartDay,
+        sysCfg.payroll?.cycleEndDay,
+        sysCfg.reportsAndSheets?.monthDaysCount
+      );
       from = c.start; to = c.end; month = c.start.slice(0, 7);
     }
   }
@@ -375,19 +385,37 @@ router.get('/:id', requireAuth, async (req, res) => {
   const attendanceParams = [targetId];
   let attendanceSql = `SELECT
       COALESCE(SUM(CASE WHEN value_num IN (0.5, 1, 1.5) THEN value_num ELSE 0 END), 0) AS present_days,
-      COUNT(CASE WHEN value_num = 0 THEN 1 END) AS casual_leave,
-      COUNT(CASE WHEN TRIM(COALESCE(value_text,'')) = 'ا' THEN 1 END) AS leave_with_permission,
+      COUNT(CASE WHEN TRIM(COALESCE(value_text,'')) = 'ع' THEN 1 END) AS casual_leave,
+      COUNT(CASE WHEN TRIM(COALESCE(value_text,'')) IN ('ا', 'أ') THEN 1 END) AS leave_with_permission,
       COUNT(CASE WHEN TRIM(COALESCE(value_text,'')) = 'ب' THEN 1 END) AS leave_without_permission,
-      COUNT(CASE WHEN TRIM(COALESCE(value_text,'')) = 'م' THEN 1 END) AS sick_leave
+      COUNT(CASE WHEN TRIM(COALESCE(value_text,'')) = 'م' THEN 1 END) AS sick_leave,
+      COUNT(CASE WHEN TRIM(COALESCE(value_text,'')) = 'ن' THEN 1 END) AS exam_leave,
+      COUNT(CASE WHEN ((value_num IS NOT NULL AND value_num = 0) OR TRIM(COALESCE(value_text,'')) = '0') THEN 1 END) AS unclassified_absence
     FROM stage_daily WHERE employee_id = ? AND stage = 'الحضور'`;
   if (from) { attendanceSql += ' AND entry_date >= ?'; attendanceParams.push(from); }
   if (to) { attendanceSql += ' AND entry_date <= ?'; attendanceParams.push(to); }
-  const attendance = (await db.prepare(attendanceSql).get(...attendanceParams)) || { present_days: 0, casual_leave: 0, leave_with_permission: 0, leave_without_permission: 0, sick_leave: 0 };
+  const attendance = (await db.prepare(attendanceSql).get(...attendanceParams)) || {
+    present_days: 0,
+    casual_leave: 0,
+    leave_with_permission: 0,
+    leave_without_permission: 0,
+    sick_leave: 0,
+    exam_leave: 0,
+    unclassified_absence: 0,
+  };
   attendance.casual_leave = Number(attendance.casual_leave || 0);
   attendance.leave_with_permission = Number(attendance.leave_with_permission || 0);
   attendance.leave_without_permission = Number(attendance.leave_without_permission || 0);
   attendance.sick_leave = Number(attendance.sick_leave || 0);
-  attendance.absent_days = attendance.casual_leave + attendance.leave_with_permission + attendance.leave_without_permission + attendance.sick_leave;
+  attendance.exam_leave = Number(attendance.exam_leave || 0);
+  attendance.unclassified_absence = Number(attendance.unclassified_absence || 0);
+  attendance.absent_days =
+    attendance.casual_leave +
+    attendance.leave_with_permission +
+    attendance.leave_without_permission +
+    attendance.sick_leave +
+    attendance.exam_leave +
+    attendance.unclassified_absence;
 
   // Attendance/leave counts are derived from the daily attendance codes for the selected period.
   // Keep all non-attendance EmployeeSummary fields untouched; attendance is sourced from stage_daily.
@@ -398,6 +426,8 @@ router.get('/:id', requireAuth, async (req, res) => {
   summary.leave_with_permission = attendance.leave_with_permission;
   summary.leave_without_permission = attendance.leave_without_permission;
   summary.sick_leave = attendance.sick_leave;
+  summary.exam_leave = attendance.exam_leave;
+  summary.unclassified_absence = attendance.unclassified_absence;
 
   const { top5ByStage } = await computeTop5ByStage(normalizeDate(from), normalizeDate(to), null);
   const myRanks = myTop5Ranks(top5ByStage, targetId);

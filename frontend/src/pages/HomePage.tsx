@@ -3,17 +3,19 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
   ArrowUpDown,
+  ArrowUpLeft,
   Bell,
+  BookOpen,
   Briefcase,
   Building2,
   Calendar,
-  ExternalLink,
   FileBarChart2,
   FileSpreadsheet,
   FileText,
   Filter,
   FilterX,
   GraduationCap,
+  Link2,
   PenSquare,
   Percent,
   RefreshCw,
@@ -27,6 +29,7 @@ import {
   UserRoundMinus,
   UserRoundPlus,
   Users,
+  Wallet,
   XCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -52,13 +55,13 @@ import { cn } from '@/lib/utils';
 import { AppShell } from '@/components/layout/AppShell';
 import { ExportActionButton } from '@/components/shared/ExportButtons';
 import { GlobalSearchBar } from '@/components/shared/GlobalSearchBar';
-import { KpiCard } from '@/components/shared/KpiCard';
 import { MultiFilterPopover } from '@/components/shared/MultiFilterPopover';
 import {
   CompanyComparisonChart,
   DailyAttendanceTrendChart,
 } from '@/components/shared/Charts';
 import { EmployeePerformanceSection } from '@/components/shared/EmployeePerformanceSection';
+import { SeasonalBannerFrame } from '@/components/shared/SeasonalDecor';
 import { Button } from '@/components/ui/button';
 import { DatePicker } from '@/components/ui/date-picker';
 import { Input } from '@/components/ui/input';
@@ -84,13 +87,22 @@ const STATUS_OPTIONS = [
   { value: 'present', label: 'حضور' },
   { value: 'casual', label: 'إجازة عارضة' },
   { value: 'permission', label: 'إجازة بإذن' },
-  { value: 'unauthorized', label: 'بدون إذن' },
-  { value: 'medical', label: 'مرضي' },
+  { value: 'unauthorized', label: 'غياب بدون إذن' },
+  { value: 'medical', label: 'إجازة مرضي' },
+  { value: 'exam', label: 'إجازة امتحان' },
+  { value: 'unclassified', label: 'غير مصنف' },
   { value: 'absent', label: 'إجمالي الغياب' },
 ];
 
 export function HomePage() {
-  const { user, isCreator, isAdminUp, isSupervisorUp, isEmployee } = useAuth();
+  const {
+    user,
+    isCreator,
+    isAdminUp,
+    isSupervisorUp,
+    isEmployee,
+    publicConfig: authPublicConfig,
+  } = useAuth();
   const navigate = useNavigate();
 
   // Banner + public system config rendered right below Topbar
@@ -125,10 +137,11 @@ export function HomePage() {
     };
   }, []);
 
+  const effectivePublicConfig = authPublicConfig || publicConfig;
   const noticeText =
-    publicConfig?.displayAndFeatures?.systemNoticeEnabled &&
-    publicConfig.displayAndFeatures.systemNoticeText?.trim()
-      ? publicConfig.displayAndFeatures.systemNoticeText.trim()
+    effectivePublicConfig?.displayAndFeatures?.systemNoticeEnabled &&
+    effectivePublicConfig.displayAndFeatures.systemNoticeText?.trim()
+      ? effectivePublicConfig.displayAndFeatures.systemNoticeText.trim()
       : '';
 
   const bannerElement =
@@ -142,13 +155,16 @@ export function HomePage() {
             </div>
           )}
           {bannerUrl && (
-            <div className="overflow-hidden rounded-xl border border-border bg-card shadow-xs">
+            <SeasonalBannerFrame
+              themeOverride={effectivePublicConfig?.displayAndFeatures?.seasonalTheme}
+              decorOverride={effectivePublicConfig?.displayAndFeatures?.seasonalDecorEnabled}
+            >
               <img
                 src={bannerUrl}
                 alt="إعلان النظام"
                 className="w-full max-h-52 object-cover block"
               />
-            </div>
+            </SeasonalBannerFrame>
           )}
         </div>
       </div>
@@ -161,7 +177,7 @@ export function HomePage() {
           isCreator={isCreator}
           isAdminUp={isAdminUp}
           userName={user?.name}
-          publicConfig={publicConfig}
+          publicConfig={effectivePublicConfig}
           navigate={navigate}
         />
       ) : (
@@ -169,7 +185,7 @@ export function HomePage() {
           userId={user?.id}
           userName={user?.name}
           isEmployee={isEmployee}
-          publicConfig={publicConfig}
+          publicConfig={effectivePublicConfig}
         />
       )}
     </AppShell>
@@ -199,6 +215,7 @@ function ManagementHomeView({
 
   const cycleStartDay = publicConfig?.payroll?.cycleStartDay ?? 21;
   const cycleEndDay = publicConfig?.payroll?.cycleEndDay ?? 20;
+  const monthDaysCount = publicConfig?.reportsAndSheets?.monthDaysCount ?? 'auto';
   const absThreshold = publicConfig?.payroll?.unauthorizedAbsenceThreshold ?? 3;
   const canExportTable = isAdminUp || (publicConfig?.displayAndFeatures?.allowSupervisorExport ?? true);
 
@@ -308,7 +325,7 @@ function ManagementHomeView({
         if (dts.length) {
           const first = dts[0];
           const last = dts[dts.length - 1];
-          const cyc = payrollCycle(last, cycleStartDay, cycleEndDay);
+          const cyc = payrollCycle(last, cycleStartDay, cycleEndDay, monthDaysCount);
           initFrom = cyc.start < first ? first : cyc.start;
           initTo = cyc.end > last ? last : cyc.end;
           setFrom(initFrom);
@@ -333,7 +350,7 @@ function ManagementHomeView({
     return () => {
       active = false;
     };
-  }, [fetchAllData, cycleStartDay, cycleEndDay]);
+  }, [fetchAllData, cycleStartDay, cycleEndDay, monthDaysCount]);
 
   const applyQuickRange = (key: QuickRangeKey) => {
     if (!availableDates.length) return;
@@ -352,7 +369,7 @@ function ManagementHomeView({
       nextFrom = w < first ? first : w;
       nextTo = last;
     } else if (key === 'month') {
-      const c = payrollCycle(last, cycleStartDay, cycleEndDay);
+      const c = payrollCycle(last, cycleStartDay, cycleEndDay, monthDaysCount);
       nextFrom = c.start < first ? first : c.start;
       nextTo = c.end > last ? last : c.end;
     } else {
@@ -388,7 +405,7 @@ function ManagementHomeView({
   const handleResetFilters = () => {
     const first = availableDates[0] || '';
     const last = availableDates[availableDates.length - 1] || '';
-    const cyc = last ? payrollCycle(last, cycleStartDay, cycleEndDay) : null;
+    const cyc = last ? payrollCycle(last, cycleStartDay, cycleEndDay, monthDaysCount) : null;
     const initFrom = cyc ? (cyc.start < first ? first : cyc.start) : first;
     const initTo = cyc ? (cyc.end > last ? last : cyc.end) : last;
 
@@ -766,112 +783,197 @@ function ManagementHomeView({
         </CardContent>
       </Card>
 
-      {/* Unified KPI Grid (7 Admin Overview + 5 Attendance KPIs) */}
+      {/* Unified Employee-Style KPI Strip (Original 6-Column / 12-Item Grid Division) */}
       {loading && !attendance ? (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3.5">
-          {Array.from({ length: 12 }).map((_, i) => (
-            <Skeleton key={i} className="h-24 rounded-xl" />
-          ))}
-        </div>
+        <Skeleton className="h-48 w-full rounded-xl" />
       ) : (
-        <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3.5">
-          {overview && (
-            <>
-              <KpiCard
-                label="إجمالي الموظفين"
-                value={fmtNumber(overview.total)}
-                icon={Users}
-                tone="primary"
-                onClick={() => navigate('/admin-employees.html?status=active')}
-              />
-              <KpiCard
-                label="سمارت بيزنس"
-                value={fmtNumber(overview.smart)}
-                icon={Building2}
-                tone="default"
-                onClick={() => navigate('/admin-employees.html?status=active&company=smart')}
-              />
-              <KpiCard
-                label="برافوس"
-                value={fmtNumber(overview.bravos)}
-                icon={Briefcase}
-                tone="default"
-                onClick={() => navigate('/admin-employees.html?status=active&company=bravos')}
-              />
-              <KpiCard
-                label="الطلاب"
-                value={fmtNumber(overview.students)}
-                icon={Users}
-                tone="default"
-                onClick={() => navigate('/admin-employees.html?status=active&education=طالب')}
-              />
-              <KpiCard
-                label="الخريجون"
-                value={fmtNumber(overview.graduates)}
-                icon={GraduationCap}
-                tone="default"
-                onClick={() => navigate('/admin-employees.html?status=active&education=خريج')}
-              />
-              <KpiCard
-                label="الجدد هذا الشهر"
-                value={fmtNumber(overview.newEmployees)}
-                icon={UserRoundPlus}
-                tone="success"
-                onClick={() => navigate('/employees-new.html')}
-              />
-              <KpiCard
-                label="المغادرون"
-                value={fmtNumber(overview.leftEmployees)}
-                icon={UserRoundMinus}
-                tone="danger"
-                onClick={() => navigate('/employees-left.html')}
-              />
-            </>
-          )}
-
-          {totals && (
-            <>
-              <KpiCard
-                label="إجمالي الحضور"
-                value={fmtDecimal(totals.present)}
-                icon={UserCheck}
-                tone="success"
-                active={selectedStatuses.includes('present')}
-                onClick={() => drillAttendanceKpi('present', 'employees')}
-              />
-              <KpiCard
-                label="نسبة الحضور"
-                value={fmtWholePercent(totals.attendance_rate)}
-                icon={Percent}
-                tone="primary"
-                onClick={() => drillAttendanceKpi('', 'daily')}
-              />
-              <KpiCard
-                label="إجمالي الغياب"
-                value={fmtDecimal(totals.absent)}
-                icon={XCircle}
-                tone="warning"
-                active={selectedStatuses.includes('absent')}
-                onClick={() => drillAttendanceKpi('absent', 'employees')}
-              />
-              <KpiCard
-                label="نسبة الغياب"
-                value={fmtWholePercent(absenceRate)}
-                icon={TrendingDown}
-                tone="warning"
-                onClick={() => drillAttendanceKpi('absent', 'daily')}
-              />
-              <KpiCard
-                label="غياب بدون إذن"
-                value={fmtDecimal(totals.unauthorized)}
-                icon={AlertTriangle}
-                tone="danger"
-                active={selectedStatuses.includes('unauthorized')}
-                onClick={() => drillAttendanceKpi('unauthorized', 'employees')}
-              />
-            </>
-          )}
-        </section>
+        (overview || totals) && (
+          <section className="rounded-xl border border-border bg-card overflow-hidden">
+            <div className="bg-secondary/20">
+              <div
+                className={cn(
+                  'grid -mb-px -me-px',
+                  overview && totals
+                    ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6'
+                    : overview
+                      ? 'grid-cols-2 sm:grid-cols-4 xl:grid-cols-7'
+                      : 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5'
+                )}
+              >
+                {[
+                  ...(overview
+                    ? [
+                        {
+                          label: 'إجمالي الموظفين',
+                          value: fmtNumber(overview.total),
+                          sub: 'القوى العاملة النشطة',
+                          icon: Users,
+                          iconClass: 'text-primary',
+                          valClass: 'text-primary',
+                          onClick: () => navigate('/admin-employees.html?status=active'),
+                          active: false,
+                        },
+                        {
+                          label: 'سمارت بيزنس',
+                          value: fmtNumber(overview.smart),
+                          sub:
+                            overview.total > 0
+                              ? `${Math.round((overview.smart / overview.total) * 100)}% من الإجمالي`
+                              : 'شركة سمارت بيزنس',
+                          icon: Building2,
+                          iconClass: 'text-muted-foreground',
+                          valClass: 'text-foreground',
+                          onClick: () =>
+                            navigate('/admin-employees.html?status=active&company=smart'),
+                          active: false,
+                        },
+                        {
+                          label: 'برافوس',
+                          value: fmtNumber(overview.bravos),
+                          sub:
+                            overview.total > 0
+                              ? `${Math.round((overview.bravos / overview.total) * 100)}% من الإجمالي`
+                              : 'شركة برافوس',
+                          icon: Briefcase,
+                          iconClass: 'text-muted-foreground',
+                          valClass: 'text-foreground',
+                          onClick: () =>
+                            navigate('/admin-employees.html?status=active&company=bravos'),
+                          active: false,
+                        },
+                        {
+                          label: 'الطلاب',
+                          value: fmtNumber(overview.students),
+                          sub:
+                            overview.total > 0
+                              ? `${Math.round((overview.students / overview.total) * 100)}% من الإجمالي`
+                              : 'فئة الطلاب',
+                          icon: Users,
+                          iconClass: 'text-muted-foreground',
+                          valClass: 'text-foreground',
+                          onClick: () =>
+                            navigate('/admin-employees.html?status=active&education=طالب'),
+                          active: false,
+                        },
+                        {
+                          label: 'الخريجون',
+                          value: fmtNumber(overview.graduates),
+                          sub:
+                            overview.total > 0
+                              ? `${Math.round((overview.graduates / overview.total) * 100)}% من الإجمالي`
+                              : 'فئة الخريجين',
+                          icon: GraduationCap,
+                          iconClass: 'text-muted-foreground',
+                          valClass: 'text-foreground',
+                          onClick: () =>
+                            navigate('/admin-employees.html?status=active&education=خريج'),
+                          active: false,
+                        },
+                        {
+                          label: 'الجدد هذا الشهر',
+                          value: fmtNumber(overview.newEmployees),
+                          sub: 'انضمامات الشهر الحالي',
+                          icon: UserRoundPlus,
+                          iconClass: 'text-emerald-600 dark:text-emerald-400',
+                          valClass: 'text-emerald-600 dark:text-emerald-400',
+                          onClick: () => navigate('/employees-new.html'),
+                          active: false,
+                        },
+                        {
+                          label: 'المغادرون',
+                          value: fmtNumber(overview.leftEmployees),
+                          sub: 'أرشيف المغادرين',
+                          icon: UserRoundMinus,
+                          iconClass: 'text-destructive',
+                          valClass: 'text-destructive',
+                          onClick: () => navigate('/employees-left.html'),
+                          active: false,
+                        },
+                      ]
+                    : []),
+                  ...(totals
+                    ? [
+                        {
+                          label: 'إجمالي الحضور',
+                          value: fmtDecimal(totals.present),
+                          sub: 'اضغط لتصفية الحضور',
+                          icon: UserCheck,
+                          iconClass: 'text-emerald-600 dark:text-emerald-400',
+                          valClass: 'text-emerald-600 dark:text-emerald-400',
+                          onClick: () => drillAttendanceKpi('present', 'employees'),
+                          active: selectedStatuses.includes('present'),
+                        },
+                        {
+                          label: 'نسبة الحضور',
+                          value: fmtWholePercent(totals.attendance_rate),
+                          sub: 'عرض التقرير اليومي',
+                          icon: Percent,
+                          iconClass: 'text-primary',
+                          valClass: 'text-primary',
+                          onClick: () => drillAttendanceKpi('', 'daily'),
+                          active: false,
+                        },
+                        {
+                          label: 'إجمالي الغياب',
+                          value: fmtDecimal(totals.absent),
+                          sub: 'اضغط لتصفية الغياب',
+                          icon: XCircle,
+                          iconClass: 'text-amber-600 dark:text-amber-400',
+                          valClass: 'text-amber-600 dark:text-amber-400',
+                          onClick: () => drillAttendanceKpi('absent', 'employees'),
+                          active: selectedStatuses.includes('absent'),
+                        },
+                        {
+                          label: 'نسبة الغياب',
+                          value: fmtWholePercent(absenceRate),
+                          sub: 'معدل الغياب للفترة',
+                          icon: TrendingDown,
+                          iconClass: 'text-amber-600 dark:text-amber-400',
+                          valClass: 'text-amber-600 dark:text-amber-400',
+                          onClick: () => drillAttendanceKpi('absent', 'daily'),
+                          active: false,
+                        },
+                        {
+                          label: 'غياب بدون إذن',
+                          value: fmtDecimal(totals.unauthorized),
+                          sub: 'اضغط لتصفية المخالفات',
+                          icon: AlertTriangle,
+                          iconClass: 'text-destructive',
+                          valClass: 'text-destructive',
+                          onClick: () => drillAttendanceKpi('unauthorized', 'employees'),
+                          active: selectedStatuses.includes('unauthorized'),
+                        },
+                      ]
+                    : []),
+                ].map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.label}
+                      type="button"
+                      onClick={item.onClick}
+                      className={cn(
+                        'p-4 space-y-1 text-start border-b border-e border-border/70 transition-colors cursor-pointer hover:bg-card/80',
+                        item.active && 'bg-primary/10 ring-1 ring-inset ring-primary/40'
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-2 text-xs font-semibold text-muted-foreground">
+                        <span className="truncate">{item.label}</span>
+                        <Icon className={cn('h-4 w-4 shrink-0', item.iconClass)} />
+                      </div>
+                      <div className={cn('text-2xl font-extrabold tabular-nums', item.valClass)}>
+                        {item.value}
+                      </div>
+                      <div className="text-[11px] text-muted-foreground truncate tabular-nums">
+                        {item.sub}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </section>
+        )
       )}
 
       {/* Unauthorized Absence Alert Panel (>= 3 days) */}
@@ -1132,6 +1234,8 @@ function ManagementHomeView({
                         </button>
                       </TableHead>
                       <TableHead className="text-center">مرضي</TableHead>
+                      <TableHead className="text-center">امتحان</TableHead>
+                      <TableHead className="text-center">غير مصنف</TableHead>
                       <TableHead className="text-center">
                         <button
                           type="button"
@@ -1148,7 +1252,7 @@ function ManagementHomeView({
                     {filteredAndSortedEmployees.length === 0 ? (
                       <TableRow>
                         <TableCell
-                          colSpan={12}
+                          colSpan={14}
                           className="py-10 text-center text-xs text-muted-foreground"
                         >
                           لا توجد بيانات مطابقة
@@ -1177,12 +1281,22 @@ function ManagementHomeView({
                           <TableCell className="text-center text-destructive font-semibold">
                             {fmtDecimal(r.absent)}
                           </TableCell>
-                          <TableCell className="text-center">{fmtDecimal(r.casual)}</TableCell>
+                          <TableCell className="text-center text-yellow-600 dark:text-yellow-400 font-semibold">
+                            {fmtDecimal(r.casual)}
+                          </TableCell>
                           <TableCell className="text-center">{fmtDecimal(r.permission)}</TableCell>
                           <TableCell className="text-center text-destructive font-semibold">
                             {fmtDecimal(r.unauthorized)}
                           </TableCell>
-                          <TableCell className="text-center">{fmtDecimal(r.medical)}</TableCell>
+                          <TableCell className="text-center text-[#800020] dark:text-[#f07b93] font-semibold">
+                            {fmtDecimal(r.medical)}
+                          </TableCell>
+                          <TableCell className="text-center text-purple-600 dark:text-purple-400 font-semibold">
+                            {fmtDecimal(r.exam)}
+                          </TableCell>
+                          <TableCell className="text-center text-muted-foreground">
+                            {fmtDecimal(r.unclassified)}
+                          </TableCell>
                           <TableCell className="text-center font-bold">
                             {fmtWholePercent(r.attendance_rate)}
                           </TableCell>
@@ -1207,6 +1321,8 @@ function ManagementHomeView({
                       <TableHead className="text-center">بإذن</TableHead>
                       <TableHead className="text-center">بدون إذن</TableHead>
                       <TableHead className="text-center">مرضي</TableHead>
+                      <TableHead className="text-center">امتحان</TableHead>
+                      <TableHead className="text-center">غير مصنف</TableHead>
                       <TableHead className="text-center">نسبة الحضور</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -1214,7 +1330,7 @@ function ManagementHomeView({
                     {(attendance.daily || []).length === 0 ? (
                       <TableRow>
                         <TableCell
-                          colSpan={9}
+                          colSpan={11}
                           className="py-8 text-center text-xs text-muted-foreground"
                         >
                           لا توجد بيانات يومية
@@ -1233,12 +1349,22 @@ function ManagementHomeView({
                           <TableCell className="text-center text-destructive font-semibold">
                             {fmtDecimal(d.absent)}
                           </TableCell>
-                          <TableCell className="text-center">{fmtDecimal(d.casual)}</TableCell>
+                          <TableCell className="text-center text-yellow-600 dark:text-yellow-400 font-semibold">
+                            {fmtDecimal(d.casual)}
+                          </TableCell>
                           <TableCell className="text-center">{fmtDecimal(d.permission)}</TableCell>
                           <TableCell className="text-center text-destructive">
                             {fmtDecimal(d.unauthorized)}
                           </TableCell>
-                          <TableCell className="text-center">{fmtDecimal(d.medical)}</TableCell>
+                          <TableCell className="text-center text-[#800020] dark:text-[#f07b93] font-semibold">
+                            {fmtDecimal(d.medical)}
+                          </TableCell>
+                          <TableCell className="text-center text-purple-600 dark:text-purple-400 font-semibold">
+                            {fmtDecimal(d.exam)}
+                          </TableCell>
+                          <TableCell className="text-center text-muted-foreground">
+                            {fmtDecimal(d.unclassified)}
+                          </TableCell>
                           <TableCell className="text-center font-bold">
                             {fmtWholePercent(d.attendance_rate)}
                           </TableCell>
@@ -1365,6 +1491,7 @@ function EmployeeSelfHomeView({
 
   const cycleStartDay = publicConfig?.payroll?.cycleStartDay ?? 21;
   const cycleEndDay = publicConfig?.payroll?.cycleEndDay ?? 20;
+  const monthDaysCount = publicConfig?.reportsAndSheets?.monthDaysCount ?? 'auto';
   const allowEmployeeExport = publicConfig?.displayAndFeatures?.allowEmployeeExport ?? true;
   const showBonusAndDeductions =
     publicConfig?.displayAndFeatures?.showBonusAndDeductionsToEmployee ?? true;
@@ -1388,8 +1515,8 @@ function EmployeeSelfHomeView({
         if (t) params.set('to', t);
         if (stageVal && stageVal !== '__ALL__') params.set('stage', stageVal);
         if (f && t) {
-          const cf = payrollCycle(f, cycleStartDay, cycleEndDay).monthKey;
-          const ct = payrollCycle(t, cycleStartDay, cycleEndDay).monthKey;
+          const cf = payrollCycle(f, cycleStartDay, cycleEndDay, monthDaysCount).monthKey;
+          const ct = payrollCycle(t, cycleStartDay, cycleEndDay, monthDaysCount).monthKey;
           if (cf === ct) params.set('month', cf);
         }
         const res = await api<EmployeeDetailPayload>(`/api/employee/${userId}?${params}`);
@@ -1400,7 +1527,7 @@ function EmployeeSelfHomeView({
         setLoading(false);
       }
     },
-    [userId, cycleStartDay, cycleEndDay]
+    [userId, cycleStartDay, cycleEndDay, monthDaysCount]
   );
 
   useEffect(() => {
@@ -1422,7 +1549,7 @@ function EmployeeSelfHomeView({
         if (dts.length) {
           const first = dts[0];
           const last = dts[dts.length - 1];
-          const c = payrollCycle(last, cycleStartDay, cycleEndDay);
+          const c = payrollCycle(last, cycleStartDay, cycleEndDay, monthDaysCount);
           initFrom = c.start < first ? first : c.start;
           initTo = c.end > last ? last : c.end;
           setFrom(initFrom);
@@ -1439,7 +1566,7 @@ function EmployeeSelfHomeView({
     return () => {
       active = false;
     };
-  }, [loadSelf, cycleStartDay, cycleEndDay]);
+  }, [loadSelf, cycleStartDay, cycleEndDay, monthDaysCount]);
 
   return (
     <div className="space-y-5">
@@ -1455,8 +1582,8 @@ function EmployeeSelfHomeView({
         </div>
 
         {/* Employee Period Filter */}
-        <div className="flex flex-wrap items-center gap-2 no-print">
-          <div className="w-40">
+        <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 no-print">
+          <div className="sm:w-36">
             <DatePicker
               value={from}
               min={availableDates[0] || undefined}
@@ -1466,7 +1593,7 @@ function EmployeeSelfHomeView({
               className="text-xs"
             />
           </div>
-          <div className="w-40">
+          <div className="sm:w-36">
             <DatePicker
               value={to}
               min={availableDates[0] || undefined}
@@ -1476,7 +1603,7 @@ function EmployeeSelfHomeView({
               className="text-xs"
             />
           </div>
-          <div className="w-40">
+          <div className="sm:w-36">
             <NativeSelect
               value={selectedStage}
               onChange={(e) => setSelectedStage(e.target.value)}
@@ -1493,7 +1620,7 @@ function EmployeeSelfHomeView({
           <Button
             type="button"
             size="sm"
-            className="h-9"
+            className="h-9 w-full sm:w-auto"
             onClick={() => loadSelf(from, to, selectedStage)}
             disabled={loading}
           >
@@ -1503,56 +1630,14 @@ function EmployeeSelfHomeView({
         </div>
       </div>
 
-      {/* Quick Employee Service Links Strip */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 no-print">
-        <Link
-          to="/requests.html"
-          className="group flex items-center justify-between gap-3 rounded-xl border border-primary/30 bg-primary/5 px-4 py-3 transition-colors hover:border-primary/60 hover:bg-primary/10"
-        >
-          <div className="min-w-0">
-            <div className="text-xs sm:text-sm font-bold text-primary truncate">
-              بوابة الطلبات والخدمات
-            </div>
-            <div className="text-[11px] text-muted-foreground truncate mt-0.5">
-              تقديم ومتابعة الإجازات والمستحقات والسلف
-            </div>
-          </div>
-          <FileText className="h-4 w-4 text-primary shrink-0" />
-        </Link>
-        {[
-          {
-            title: 'بوابة المرتبات',
-            sub: 'عرض بيانات المرتب والخدمات المالية',
-            href: payrollPortalUrl,
-          },
-          {
-            title: 'لائحة العمل',
-            sub: 'مراجعة لوائح وسياسات العمل الداخلية',
-            href: workRegulationsUrl,
-          },
-        ].map((item) => (
-          <a
-            key={item.title}
-            href={item.href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="group flex items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3 transition-colors hover:border-primary/40 hover:bg-muted/30"
-          >
-            <div className="min-w-0">
-              <div className="text-xs sm:text-sm font-bold text-foreground group-hover:text-primary transition-colors truncate">
-                {item.title}
-              </div>
-              <div className="text-[11px] text-muted-foreground truncate mt-0.5">{item.sub}</div>
-            </div>
-            <ExternalLink className="h-4 w-4 text-muted-foreground group-hover:text-primary shrink-0" />
-          </a>
-        ))}
-      </div>
-
-      {/* Shared Upgraded Employee Performance Section */}
+      {/* Shared Upgraded Employee Performance Section (Hero first, followed cleanly by Useful Links) */}
       {loading && !data ? (
         <div className="space-y-4">
-          <Skeleton className="h-32 rounded-xl" />
+          <Skeleton className="h-44 rounded-xl" />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Skeleton className="h-20 rounded-xl" />
+            <Skeleton className="h-20 rounded-xl" />
+          </div>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
             {Array.from({ length: 4 }).map((_, i) => (
               <Skeleton key={i} className="h-24 rounded-xl" />
@@ -1570,6 +1655,75 @@ function EmployeeSelfHomeView({
             showExportActions={allowEmployeeExport}
             showBonusAndDeductions={showBonusAndDeductions}
             isSelfView
+            afterHeroSlot={
+              <section className="space-y-2.5 no-print">
+                <div className="flex items-center justify-between gap-2 px-0.5">
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10 text-primary">
+                      <Link2 className="h-3.5 w-3.5" />
+                    </span>
+                    <h2 className="text-sm font-extrabold text-foreground">روابط تهمك</h2>
+                  </div>
+                  <span className="text-[11px] font-medium text-muted-foreground">
+                    الوصول السريع للخدمات واللوائح
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {[
+                    {
+                      title: 'بوابة المرتبات',
+                      sub: 'عرض بيانات المرتب والخدمات المالية',
+                      href: payrollPortalUrl,
+                      icon: Wallet,
+                      iconBoxClass:
+                        'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 group-hover:bg-emerald-500/15',
+                    },
+                    {
+                      title: 'لائحة العمل',
+                      sub: 'مراجعة لوائح وسياسات العمل الداخلية',
+                      href: workRegulationsUrl,
+                      icon: BookOpen,
+                      iconBoxClass:
+                        'border-primary/25 bg-primary/10 text-primary group-hover:bg-primary/15',
+                    },
+                  ].map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <a
+                        key={item.title}
+                        href={item.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="group relative flex items-center justify-between gap-3.5 rounded-xl border border-border bg-card p-3.5 sm:p-4 transition-all duration-200 hover:border-primary/45 hover:bg-accent/25 hover:shadow-xs"
+                      >
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <span
+                            className={cn(
+                              'flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition-colors',
+                              item.iconBoxClass
+                            )}
+                          >
+                            <Icon className="h-5 w-5" />
+                          </span>
+                          <div className="min-w-0">
+                            <div className="text-sm font-extrabold text-foreground group-hover:text-primary transition-colors truncate">
+                              {item.title}
+                            </div>
+                            <div className="text-xs text-muted-foreground truncate mt-0.5">
+                              {item.sub}
+                            </div>
+                          </div>
+                        </div>
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-secondary/50 text-muted-foreground transition-all group-hover:border-primary/30 group-hover:bg-primary/10 group-hover:text-primary">
+                          <ArrowUpLeft className="h-4 w-4 transition-transform duration-200 group-hover:-translate-x-0.5 group-hover:-translate-y-0.5" />
+                        </span>
+                      </a>
+                    );
+                  })}
+                </div>
+              </section>
+            }
           />
         )
       )}

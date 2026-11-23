@@ -19,6 +19,7 @@ import { Label } from '@/components/ui/label';
 import { NativeSelect } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { api, ApiError } from '@/lib/api';
+import { resolveReportsAndSheetsConfig } from '@/lib/systemConfig';
 
 interface ManualEmployeeMeta {
   id: number;
@@ -73,6 +74,7 @@ function buildDateRange(from: string, to: string): string[] {
 
 export function ManualEntryPage() {
   const [meta, setMeta] = useState<ManualMetaResponse>({ ok: true, employees: [], stages: [], sections: [] });
+  const [maxGridDays, setMaxGridDays] = useState<number>(31);
   const [tab, setTab] = useState('employee');
 
   // 1) Employee tab
@@ -137,6 +139,13 @@ export function ManualEntryPage() {
 
   useEffect(() => {
     loadMeta();
+    resolveReportsAndSheetsConfig()
+      .then((cfg) => {
+        setMaxGridDays(cfg.monthDaysCount === '30' ? 30 : 31);
+      })
+      .catch(() => {
+        // default 31
+      });
   }, [loadMeta]);
 
   const distinctCompanies = useMemo(
@@ -248,8 +257,8 @@ export function ManualEntryPage() {
       toast.error('اختر نطاق تاريخ صحيح.');
       return;
     }
-    if (dates.length > 31) {
-      toast.error('النطاق أكبر من شهر (31 يوماً كحد أقصى).');
+    if (dates.length > maxGridDays) {
+      toast.error(`النطاق أكبر من الحد المسموح (${maxGridDays} يوماً كحد أقصى).`);
       return;
     }
     setGridDates(dates);
@@ -602,7 +611,7 @@ export function ManualEntryPage() {
                           id="daily-val"
                           value={dailyValue}
                           onChange={(e) => setDailyValue(e.target.value)}
-                          placeholder="رقم أو نص (مثل: حضور / 250)"
+                          placeholder="رقم أو رمز الحضور (1 / 0.5 / ع / ا / ب / م / ن / 0)"
                           required
                         />
                       </div>

@@ -9,6 +9,7 @@ import {
   Database,
   ExternalLink,
   Eye,
+  FileBarChart2,
   Layers,
   Link2,
   Loader2,
@@ -25,7 +26,12 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, ApiError } from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
 import { fmtDateTime, fmtNumber } from '@/lib/format';
+import {
+  invalidatePublicSystemConfigCache,
+  normalizeReportsAndSheetsConfig,
+} from '@/lib/systemConfig';
 import { cn } from '@/lib/utils';
 import type {
   DatabaseInventoryPayload,
@@ -58,6 +64,7 @@ type SettingsSectionKey =
   | 'data_retention'
   | 'requests_forms'
   | 'display_features'
+  | 'reports_sheets'
   | 'departments_lists'
   | 'general_payroll';
 
@@ -104,6 +111,12 @@ const SECTIONS: {
     title: 'العرض والخصوصية والتنبيهات',
     subtitle: 'التحكم في ظهور Top 5 والحوافز للموظف، صلاحيات التصدير، وإعلان النظام.',
     icon: Eye,
+  },
+  {
+    key: 'reports_sheets',
+    title: 'إعدادات التقارير والشيتات',
+    subtitle: 'حجم التقارير، محاذاة الجدول، اتجاه وموضع الصفحة، وبلوكات المراحل والأشهر.',
+    icon: FileBarChart2,
   },
   {
     key: 'departments_lists',
@@ -209,6 +222,7 @@ function ListEditor({
 }
 
 export function SystemSettingsPage() {
+  const { refreshPublicConfig } = useAuth();
   const [activeSection, setActiveSection] = useState<SettingsSectionKey>('data_retention');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -256,7 +270,15 @@ export function SystemSettingsPage() {
         api<RequestMetaPayload>('/api/requests/meta'),
       ]);
 
-      setConfig(settingsRes.config ?? settingsRes.settings ?? null);
+      const rawCfg = settingsRes.config ?? settingsRes.settings ?? null;
+      setConfig(
+        rawCfg
+          ? {
+              ...rawCfg,
+              reportsAndSheets: normalizeReportsAndSheetsConfig(rawCfg.reportsAndSheets),
+            }
+          : null
+      );
       setInventory(statsRes.inventory);
       setReqMeta(metaRes);
 
@@ -314,7 +336,14 @@ export function SystemSettingsPage() {
         body: JSON.stringify(patch),
       });
       const updated = res.config ?? res.settings;
-      if (updated) setConfig(updated);
+      if (updated) {
+        setConfig({
+          ...updated,
+          reportsAndSheets: normalizeReportsAndSheetsConfig(updated.reportsAndSheets),
+        });
+      }
+      invalidatePublicSystemConfigCache();
+      refreshPublicConfig().catch(() => {});
       toast.success(successMsg);
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'تعذر حفظ الإعدادات');
@@ -391,7 +420,14 @@ export function SystemSettingsPage() {
         }),
       ]);
       const updated = sysRes.config ?? sysRes.settings;
-      if (updated) setConfig(updated);
+      if (updated) {
+        setConfig({
+          ...updated,
+          reportsAndSheets: normalizeReportsAndSheetsConfig(updated.reportsAndSheets),
+        });
+      }
+      invalidatePublicSystemConfigCache();
+      await refreshPublicConfig();
       toast.success('تم حفظ روابط الطلبات والخدمات وإعدادات المراجعة بنجاح');
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'تعذر حفظ إعدادات الطلبات');
@@ -1720,6 +1756,373 @@ export function SystemSettingsPage() {
                         <Button type="submit" disabled={saving} className="font-bold">
                           <Save className="h-4 w-4" />
                           <span>{saving ? 'جاري الحفظ...' : 'حفظ إعدادات العرض والصلاحيات'}</span>
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </form>
+              )}
+
+              {/* ================= SECTION 2C: REPORTS & SHEETS CUSTOMIZATION ================= */}
+              {activeSection === 'reports_sheets' && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    saveSystemConfig(
+                      { reportsAndSheets: config.reportsAndSheets },
+                      'تم حفظ إعدادات التقارير والشيتات بنجاح'
+                    );
+                  }}
+                  className="space-y-5"
+                >
+                  <Card>
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm font-extrabold flex items-center gap-2">
+                        <FileBarChart2 className="h-4 w-4 text-primary" />
+                        <span>تخصيص حجم ومحاذاة التقارير (PDF ومعاينة التقرير)</span>
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        تحكم كامل في حجم الخط والجداول، محاذاة البيانات داخل الجدول أفقياً ورأسياً، وموضع محتوى الصفحة في ملفات PDF.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4 text-xs">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-bold">حجم التقرير والجدول</Label>
+                          <NativeSelect
+                            value={config.reportsAndSheets.reportSize}
+                            onChange={(e) =>
+                              setConfig({
+                                ...config,
+                                reportsAndSheets: {
+                                  ...config.reportsAndSheets,
+                                  reportSize: e.target.value as 'compact' | 'normal' | 'large',
+                                },
+                              })
+                            }
+                          >
+                            <option value="compact">مضغوط (Compact — صفوف أكثر بالصفحة)</option>
+                            <option value="normal">قياسي (Normal — متوازن)</option>
+                            <option value="large">كبير (Large — خط ومسافات أوضح)</option>
+                          </NativeSelect>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-bold">اتجاه صفحة PDF</Label>
+                          <NativeSelect
+                            value={config.reportsAndSheets.reportOrientation}
+                            onChange={(e) =>
+                              setConfig({
+                                ...config,
+                                reportsAndSheets: {
+                                  ...config.reportsAndSheets,
+                                  reportOrientation: e.target.value as
+                                    | 'auto'
+                                    | 'portrait'
+                                    | 'landscape',
+                                },
+                              })
+                            }
+                          >
+                            <option value="auto">تلقائي حسب نوع التقرير (مستحسن)</option>
+                            <option value="portrait">طولي دائماً (Portrait A4)</option>
+                            <option value="landscape">عرضي دائماً (Landscape A4)</option>
+                          </NativeSelect>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-bold">موضع الصفحة عمودياً</Label>
+                          <NativeSelect
+                            value={config.reportsAndSheets.pageVerticalAlign}
+                            onChange={(e) =>
+                              setConfig({
+                                ...config,
+                                reportsAndSheets: {
+                                  ...config.reportsAndSheets,
+                                  pageVerticalAlign: e.target.value as 'top' | 'center',
+                                },
+                              })
+                            }
+                          >
+                            <option value="top">أعلى الصفحة كالمعتاد (افتراضي)</option>
+                            <option value="center">توسيط الصفحة الواحدة رأسياً</option>
+                          </NativeSelect>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-border/70">
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-bold">المحاذاة الأفقية داخل خلايا الجدول</Label>
+                          <NativeSelect
+                            value={config.reportsAndSheets.tableAlignH}
+                            onChange={(e) =>
+                              setConfig({
+                                ...config,
+                                reportsAndSheets: {
+                                  ...config.reportsAndSheets,
+                                  tableAlignH: e.target.value as 'center' | 'right' | 'left',
+                                },
+                              })
+                            }
+                          >
+                            <option value="center">وسط الخلية (Center)</option>
+                            <option value="left">يسار الخلية (Left)</option>
+                            <option value="right">يمين الخلية (Right)</option>
+                          </NativeSelect>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-bold">المحاذاة الرأسية داخل خلايا الجدول</Label>
+                          <NativeSelect
+                            value={config.reportsAndSheets.tableAlignV}
+                            onChange={(e) =>
+                              setConfig({
+                                ...config,
+                                reportsAndSheets: {
+                                  ...config.reportsAndSheets,
+                                  tableAlignV: e.target.value as 'middle' | 'top' | 'bottom',
+                                },
+                              })
+                            }
+                          >
+                            <option value="middle">منتصف الخلية (Middle)</option>
+                            <option value="top">أعلى الخلية (Top)</option>
+                            <option value="bottom">أسفل الخلية (Bottom)</option>
+                          </NativeSelect>
+                        </div>
+                      </div>
+
+                      {/* Live Visual Preview of Table Cell Alignment, Size & Page Vertical Position */}
+                      <div className="rounded-lg border border-border bg-secondary/20 p-3 space-y-2">
+                        <div className="flex items-center justify-between text-[11px] font-bold text-muted-foreground">
+                          <span>معاينة حية لمحاذاة جدول التقرير وموضع الصفحة</span>
+                          <span dir="ltr">
+                            {config.reportsAndSheets.reportSize.toUpperCase()} ·{' '}
+                            {config.reportsAndSheets.tableAlignH} / {config.reportsAndSheets.tableAlignV} ·{' '}
+                            Page: {config.reportsAndSheets.pageVerticalAlign}
+                          </span>
+                        </div>
+                        <div
+                          className={cn(
+                            'rounded border border-border bg-card p-3 min-h-[112px] flex flex-col',
+                            config.reportsAndSheets.pageVerticalAlign === 'center'
+                              ? 'justify-center'
+                              : 'justify-start'
+                          )}
+                        >
+                          <table className="w-full border-collapse text-[11px]" dir="ltr">
+                            <thead>
+                              <tr className="bg-muted">
+                                {['Employee', 'Stage', 'Achieved', '%'].map((col) => (
+                                  <th
+                                    key={col}
+                                    className={cn(
+                                      'border border-border font-bold',
+                                      config.reportsAndSheets.reportSize === 'compact'
+                                        ? 'px-1.5 py-1 text-[10px]'
+                                        : config.reportsAndSheets.reportSize === 'large'
+                                          ? 'px-3 py-2 text-xs'
+                                          : 'px-2 py-1.5',
+                                      config.reportsAndSheets.tableAlignH === 'left'
+                                        ? 'text-left'
+                                        : config.reportsAndSheets.tableAlignH === 'right'
+                                          ? 'text-right'
+                                          : 'text-center',
+                                      config.reportsAndSheets.tableAlignV === 'top'
+                                        ? 'align-top'
+                                        : config.reportsAndSheets.tableAlignV === 'bottom'
+                                          ? 'align-bottom'
+                                          : 'align-middle'
+                                    )}
+                                  >
+                                    {col}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              <tr>
+                                {['Ahmed Ali', 'فحص', '1,250', '104.2%'].map((val, idx) => (
+                                  <td
+                                    key={idx}
+                                    className={cn(
+                                      'border border-border h-10',
+                                      config.reportsAndSheets.reportSize === 'compact'
+                                        ? 'px-1.5 py-0.5 text-[10px]'
+                                        : config.reportsAndSheets.reportSize === 'large'
+                                          ? 'px-3 py-2 text-xs'
+                                          : 'px-2 py-1',
+                                      config.reportsAndSheets.tableAlignH === 'left'
+                                        ? 'text-left'
+                                        : config.reportsAndSheets.tableAlignH === 'right'
+                                          ? 'text-right'
+                                          : 'text-center',
+                                      config.reportsAndSheets.tableAlignV === 'top'
+                                        ? 'align-top'
+                                        : config.reportsAndSheets.tableAlignV === 'bottom'
+                                          ? 'align-bottom'
+                                          : 'align-middle'
+                                    )}
+                                  >
+                                    {val}
+                                  </td>
+                                ))}
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm font-extrabold flex items-center gap-2">
+                        <Layers className="h-4 w-4 text-primary" />
+                        <span>إعدادات الشيتات والمراحل وعدد أيام الشهر</span>
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        تحديد عدد صفوف بلوك المراحل لكل موظف عند رفع شيت الإكسيل (16 بلوك أو أكثر)، عدد أعمدة الأيام في تقارير الموظف، وطول الشهر (30 أو 31 يوم).
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4 text-xs">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-bold">
+                            عدد صفوف مراحل الموظف في الشيت (Block)
+                          </Label>
+                          <Input
+                            type="number"
+                            min={16}
+                            max={40}
+                            value={config.reportsAndSheets.sheetStageBlockRows}
+                            onChange={(e) =>
+                              setConfig({
+                                ...config,
+                                reportsAndSheets: {
+                                  ...config.reportsAndSheets,
+                                  sheetStageBlockRows: Math.min(
+                                    40,
+                                    Math.max(16, Number(e.target.value) || 16)
+                                  ),
+                                },
+                              })
+                            }
+                            className="tabular-nums"
+                          />
+                          <div className="flex flex-wrap gap-1 pt-0.5">
+                            {[16, 20, 24, 30].map((preset) => (
+                              <button
+                                key={preset}
+                                type="button"
+                                onClick={() =>
+                                  setConfig({
+                                    ...config,
+                                    reportsAndSheets: {
+                                      ...config.reportsAndSheets,
+                                      sheetStageBlockRows: preset,
+                                    },
+                                  })
+                                }
+                                className={cn(
+                                  'rounded border px-2 py-0.5 text-[10px] font-bold tabular-nums cursor-pointer transition-colors',
+                                  config.reportsAndSheets.sheetStageBlockRows === preset
+                                    ? 'border-primary bg-primary text-primary-foreground'
+                                    : 'border-border bg-secondary/40 text-muted-foreground hover:text-foreground'
+                                )}
+                              >
+                                {preset}
+                              </button>
+                            ))}
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            الافتراضي 16 مرحلة/صف لكل موظف (يمكن رفعه حتى 40).
+                          </p>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-bold">
+                            عدد أيام البلوك في PDF الموظف
+                          </Label>
+                          <Input
+                            type="number"
+                            min={8}
+                            max={31}
+                            value={config.reportsAndSheets.pdfMaxDatesPerBlock}
+                            onChange={(e) =>
+                              setConfig({
+                                ...config,
+                                reportsAndSheets: {
+                                  ...config.reportsAndSheets,
+                                  pdfMaxDatesPerBlock: Math.min(
+                                    31,
+                                    Math.max(8, Number(e.target.value) || 16)
+                                  ),
+                                },
+                              })
+                            }
+                            className="tabular-nums"
+                          />
+                          <p className="text-[11px] text-muted-foreground">
+                            تقسيم جدول أيام الموظف إلى بلوكات (مثلاً 16 أو 31 يوم).
+                          </p>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-bold">عدد أيام الشهر في الشيتات</Label>
+                          <NativeSelect
+                            value={config.reportsAndSheets.monthDaysCount}
+                            onChange={(e) =>
+                              setConfig({
+                                ...config,
+                                reportsAndSheets: {
+                                  ...config.reportsAndSheets,
+                                  monthDaysCount: e.target.value as 'auto' | '30' | '31',
+                                },
+                              })
+                            }
+                          >
+                            <option value="auto">تلقائي حسب الشهر (28–31 يوم)</option>
+                            <option value="30">30 يوماً</option>
+                            <option value="31">31 يوماً</option>
+                          </NativeSelect>
+                          <p className="text-[11px] text-muted-foreground">
+                            يُطبق على أعمدة استيراد الشيت ونطاق الإدخال والدورات.
+                          </p>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-bold">عمود نسبة التارجت في الشيت</Label>
+                          <NativeSelect
+                            value={config.reportsAndSheets.targetPercentageColumn || 'auto'}
+                            onChange={(e) =>
+                              setConfig({
+                                ...config,
+                                reportsAndSheets: {
+                                  ...config.reportsAndSheets,
+                                  targetPercentageColumn: e.target.value,
+                                },
+                              })
+                            }
+                          >
+                            <option value="auto">تلقائي حسب آخر عمود تاريخ (مستحسن)</option>
+                            <option value="AL">AL (شيتات 28 يوماً)</option>
+                            <option value="AM">AM (شيتات 29 يوماً)</option>
+                            <option value="AN">AN (شيتات 30 يوماً)</option>
+                            <option value="AO">AO (شيتات 31 يوماً / نسبة 30 يوم)</option>
+                            <option value="AP">AP (نسبة شيت 31 يوماً)</option>
+                            <option value="AQ">AQ</option>
+                          </NativeSelect>
+                          <p className="text-[11px] text-muted-foreground">
+                            يتعرف الوضع التلقائي على عمود التارجت والنسبة بعد آخر تاريخ (30 أو 31 يوماً) مع إخفاء الأيام الصفرية غير المسجلة.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end pt-3 border-t border-border">
+                        <Button type="submit" disabled={saving} className="font-bold">
+                          <Save className="h-4 w-4" />
+                          <span>{saving ? 'جاري الحفظ...' : 'حفظ إعدادات التقارير والشيتات'}</span>
                         </Button>
                       </div>
                     </CardContent>

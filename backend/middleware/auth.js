@@ -1,7 +1,9 @@
 const jwt = require('jsonwebtoken');
 const db = require('../database/init');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'iems-local-dev-secret-change-in-production';
+// No fallback in production: a missing secret must fail loudly, never fall back to a known value.
+const JWT_SECRET = process.env.JWT_SECRET
+  || (process.env.NODE_ENV === 'production' ? '' : 'iems-local-dev-secret-not-for-production');
 
 function normalizeShiftsList(rawShifts, fallbackShift) {
   const arr = Array.isArray(rawShifts) && rawShifts.length

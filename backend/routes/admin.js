@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const db = require('../database/init');
-const { requireAuth, requireAdmin, requireSupervisor, requireUploader, requireSystemCreator, isCreator } = require('../middleware/auth');
+const { requireAuth, requireAdmin, requireSupervisor, requireUploader, requireSystemCreator } = require('../middleware/auth');
 const { parseMasterWorkbook } = require('../utils/master-import');
 const { computeTop5ByStage } = require('./employee');
 const {
@@ -80,11 +80,16 @@ router.post('/import-master', requireAuth, requireUploader, async (req, res) => 
     const configuredDefaultPassword = sysCfgImport.general?.defaultPassword || DEFAULT_PASSWORD;
     const configuredRequireChange = Boolean(sysCfgImport.general?.requirePasswordChangeOnFirstLogin);
 
-    const parsed = parseMasterWorkbook(buffer);
+    const parsed = parseMasterWorkbook(buffer, {
+      employeeBlockRows: sysCfgImport.reportsAndSheets?.sheetStageBlockRows || 16,
+      monthDaysCount: sysCfgImport.reportsAndSheets?.monthDaysCount || 'auto',
+      targetPercentageColumn: sysCfgImport.reportsAndSheets?.targetPercentageColumn || 'auto',
+    });
     const employees = parsed.employees;
 
-    // Payroll cycle is determined automatically from the Master dates: 21st
-    // through the 20th of the following month. Store the cycle start date.
+    // Payroll cycle is determined from the Master dates using configured cycleStartDay (default 21)
+    // or 1st of month if configured to calendar month.
+    const cfgCycleStart = Math.min(28, Math.max(1, Math.round(Number(sysCfgImport.payroll?.cycleStartDay) || 21)));
     const importedDates = [];
     for (const emp of employees) {
       for (const stage of (emp.stages || [])) {
@@ -101,12 +106,12 @@ router.post('/import-master', requireAuth, requireUploader, async (req, res) => 
       const y = d.getUTCFullYear();
       const m = d.getUTCMonth();
       const day = d.getUTCDate();
-      const cycleYear = day >= 21 ? y : (m === 0 ? y - 1 : y);
-      const cycleMonth = day >= 21 ? m : (m === 0 ? 11 : m - 1);
-      return `${cycleYear}-${String(cycleMonth + 1).padStart(2, '0')}-21`;
+      const cycleYear = day >= cfgCycleStart ? y : (m === 0 ? y - 1 : y);
+      const cycleMonth = day >= cfgCycleStart ? m : (m === 0 ? 11 : m - 1);
+      return `${cycleYear}-${String(cycleMonth + 1).padStart(2, '0')}-${String(cfgCycleStart).padStart(2, '0')}`;
     }));
     if (uniqueCycles.size > 1) {
-      return res.status(400).json({ error: 'ملف الـ Master يحتوي على تواريخ تنتمي لأكثر من دورة. يجب أن تكون كل التواريخ داخل دورة واحدة من 21 إلى 20.' });
+      return res.status(400).json({ error: `ملف الـ Master يحتوي على تواريخ تنتمي لأكثر من دورة. يجب أن تكون كل التواريخ داخل دورة شهرية واحدة تبدأ من يوم ${cfgCycleStart}.` });
     }
     const monthStart = [...uniqueCycles][0];
 
@@ -1564,6 +1569,7 @@ router.get('/system/public-config', requireAuth, async (req, res) => {
       displayAndFeatures: config.displayAndFeatures,
       departmentsAndLists: config.departmentsAndLists,
       financialFormLinks: config.financialFormLinks,
+      reportsAndSheets: config.reportsAndSheets,
     });
   } catch (err) {
     res.status(500).json({ error: err.message || 'تعذر تحميل إعدادات النظام.' });

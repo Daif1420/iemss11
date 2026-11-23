@@ -18,6 +18,7 @@ const SPA_ROUTES = [
   '/employee.html',
   '/missing-data.html',
   '/requests.html',
+  '/settings.html',
   '/index.html',
 ];
 
@@ -39,16 +40,16 @@ export default defineConfig({
   resolve: {
     dedupe: ['react', 'react-dom'],
     alias: [
-      { find: '@', replacement: path.resolve(import.meta.dirname, './src') },
-      { find: /^react$/, replacement: path.resolve(import.meta.dirname, './node_modules/react') },
+      { find: '@', replacement: path.resolve(__dirname, './src') },
+      { find: /^react$/, replacement: path.resolve(__dirname, './node_modules/react') },
       {
         find: /^react\/(.*)$/,
-        replacement: `${path.resolve(import.meta.dirname, './node_modules/react')}/$1`,
+        replacement: `${path.resolve(__dirname, './node_modules/react')}/$1`,
       },
-      { find: /^react-dom$/, replacement: path.resolve(import.meta.dirname, './node_modules/react-dom') },
+      { find: /^react-dom$/, replacement: path.resolve(__dirname, './node_modules/react-dom') },
       {
         find: /^react-dom\/(.*)$/,
-        replacement: `${path.resolve(import.meta.dirname, './node_modules/react-dom')}/$1`,
+        replacement: `${path.resolve(__dirname, './node_modules/react-dom')}/$1`,
       },
     ],
   },
