@@ -98,12 +98,7 @@ async function exec(sql) {
 
 let initializationPromise = null;
 async function ensureDatabase() {
-  if (!hasDatabaseUrl) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('DATABASE_URL is required in production (refusing to use the in-memory mock database).');
-    }
-    return mockDb.ensureDatabase();
-  }
+  if (!hasDatabaseUrl) return mockDb.ensureDatabase();
   if (initializationPromise) return initializationPromise;
   initializationPromise = (async () => {
     if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required.');

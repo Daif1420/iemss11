@@ -1,13 +1,21 @@
 const express = require('express');
 const db = require('../database/init');
-const { requireAuth, getSupervisorShifts } = require('../middleware/auth');
+const {
+  requireAuth,
+  isAdminOrHr,
+  isHrManager,
+  getSupervisorShifts,
+  getHrCompanies,
+  companyMatchesList,
+  addHrCompanySql,
+} = require('../middleware/auth');
 const { getSystemConfig } = require('../utils/systemSettings');
 
 const router = express.Router();
 
 
 function canAccess(req, targetId) {
-  return (req.user.role === 'admin' || req.user.role === 'system_creator' || req.user.role === 'supervisor') || Number(req.user.id) === Number(targetId);
+  return (isAdminOrHr(req) || req.user.role === 'supervisor') || Number(req.user.id) === Number(targetId);
 }
 
 function normalizeDate(value) {
@@ -46,7 +54,18 @@ function dateFilterSql(alias, from, to, params) {
 }
 
 router.get('/list', requireAuth, async (req, res) => {
-  if (req.user.role === 'admin' || req.user.role === 'system_creator') {
+  const hrCompanies = getHrCompanies(req);
+  if (hrCompanies) {
+    if (!hrCompanies.length) return res.json({ employees: [] });
+    const params = [];
+    const whereSql = addHrCompanySql("role = 'employee'", params, 'company', hrCompanies);
+    const rows = (await db.prepare(`
+      SELECT id, name, shift, company, department
+      FROM employees WHERE ${whereSql} ORDER BY name
+    `).all(...params));
+    return res.json({ employees: rows });
+  }
+  if (isAdminOrHr(req)) {
     const rows = (await db.prepare(`
       SELECT id, name, shift, company, department
       FROM employees WHERE role = 'employee' ORDER BY name
@@ -70,6 +89,9 @@ router.get('/list', requireAuth, async (req, res) => {
 });
 
 router.get('/stages', requireAuth, async (req, res) => {
+  if (isHrManager(req)) {
+    return res.json({ stages: [] });
+  }
   const rows = (await db.prepare(`
     SELECT DISTINCT stage
     FROM stage_daily
@@ -92,10 +114,16 @@ router.get('/dates', requireAuth, async (req, res) => {
 router.get('/shifts', requireAuth, async (req, res) => {
   const supShifts = getSupervisorShifts(req);
   if (supShifts) return res.json({ shifts: supShifts });
+  const hrCompanies = getHrCompanies(req);
+  const params = [];
+  let whereSql = "role = 'employee' AND shift IS NOT NULL AND TRIM(shift) <> ''";
+  if (hrCompanies) {
+    whereSql = addHrCompanySql(whereSql, params, 'company', hrCompanies);
+  }
   const rows = (await db.prepare(`
     SELECT DISTINCT shift FROM employees
-    WHERE role = 'employee' AND shift IS NOT NULL AND TRIM(shift) <> '' ORDER BY shift
-  `).all());
+    WHERE ${whereSql} ORDER BY shift
+  `).all(...params));
   res.json({ shifts: rows.map(r => r.shift) });
 });
 
@@ -172,7 +200,9 @@ router.get('/dashboard', requireAuth, async (req, res) => {
   if (req.query.to && !to) return res.status(400).json({ error: 'صيغة تاريخ النهاية غير صحيحة.' });
   if (from && to && from > to) return res.status(400).json({ error: 'تاريخ البداية يجب أن يسبق تاريخ النهاية.' });
 
-  const isAdmin = req.user.role === 'admin' || req.user.role === 'system_creator';
+  const isAdmin = isAdminOrHr(req);
+  const hrCompanies = getHrCompanies(req);
+  const isHr = Boolean(hrCompanies);
   const supShifts = getSupervisorShifts(req);
   const isSupervisor = Boolean(supShifts);
   const effectiveShifts = isAdmin
@@ -191,6 +221,7 @@ router.get('/dashboard', requireAuth, async (req, res) => {
     baseParams.push(visibleEmployeeIds[0]);
   }
   if (isAdmin) baseWhere = addIn(baseWhere, baseParams, 'UPPER(TRIM(COALESCE(e.shift,\'\')))', effectiveShifts.map(x => x.toUpperCase()));
+  if (hrCompanies) baseWhere = addHrCompanySql(baseWhere, baseParams, 'e.company', hrCompanies);
   if (isSupervisor) {
     if (!effectiveShifts.length) baseWhere += ' AND 1=0';
     else baseWhere = addIn(baseWhere, baseParams, 'UPPER(TRIM(COALESCE(e.shift,\'\')))', effectiveShifts);
@@ -203,6 +234,7 @@ router.get('/dashboard', requireAuth, async (req, res) => {
   let attendanceWhere = `WHERE e.role = 'employee' AND sd.stage = 'الحضور'`;
   if (visibleEmployeeIds) { attendanceWhere += ` AND e.id = ?`; attendanceParams.push(visibleEmployeeIds[0]); }
   if (isAdmin) attendanceWhere = addIn(attendanceWhere, attendanceParams, 'UPPER(TRIM(COALESCE(e.shift,\'\')))', effectiveShifts.map(x => x.toUpperCase()));
+  if (hrCompanies) attendanceWhere = addHrCompanySql(attendanceWhere, attendanceParams, 'e.company', hrCompanies);
   if (isSupervisor) {
     if (!effectiveShifts.length) attendanceWhere += ' AND 1=0';
     else attendanceWhere = addIn(attendanceWhere, attendanceParams, 'UPPER(TRIM(COALESCE(e.shift,\'\')))', effectiveShifts);
@@ -224,16 +256,23 @@ router.get('/dashboard', requireAuth, async (req, res) => {
   `).get(...attendanceParams));
 
 
-  // Top 5 is computed within the requested or supervisor-scoped shifts
-  const top5ShiftFilter = isAdmin
-    ? requestedShifts
-    : (isSupervisor ? (effectiveShifts.length ? effectiveShifts : ['__NONE__']) : []);
-  const { stages, top5ByStage } = await computeTop5ByStage(from, to, requestedStages, top5ShiftFilter);
+  // Top 5 is hidden from HR Manager (attendance & requests only)
+  let stages = [];
+  let top5ByStage = {};
+  if (!isHr) {
+    const top5ShiftFilter = isAdmin
+      ? requestedShifts
+      : (isSupervisor ? (effectiveShifts.length ? effectiveShifts : ['__NONE__']) : []);
+    const computed = await computeTop5ByStage(from, to, requestedStages, top5ShiftFilter);
+    stages = computed.stages;
+    top5ByStage = computed.top5ByStage;
+  }
 
   const presentDaysByEmployeeParams = [];
   let presentWhere = `WHERE sd.stage = 'الحضور' AND e.role = 'employee'`;
   if (visibleEmployeeIds) { presentWhere += ` AND e.id = ?`; presentDaysByEmployeeParams.push(visibleEmployeeIds[0]); }
   if (isAdmin) presentWhere = addIn(presentWhere, presentDaysByEmployeeParams, 'UPPER(TRIM(COALESCE(e.shift,\'\')))', effectiveShifts.map(x => x.toUpperCase()));
+  if (hrCompanies) presentWhere = addHrCompanySql(presentWhere, presentDaysByEmployeeParams, 'e.company', hrCompanies);
   if (isSupervisor) {
     if (!effectiveShifts.length) presentWhere += ' AND 1=0';
     else presentWhere = addIn(presentWhere, presentDaysByEmployeeParams, 'UPPER(TRIM(COALESCE(e.shift,\'\')))', effectiveShifts);
@@ -249,13 +288,13 @@ router.get('/dashboard', requireAuth, async (req, res) => {
 
   const attendanceMap = Object.fromEntries(attendanceByEmployee.map(r => [r.id, Number(r.present_days || 0)]));
   const employeeCards = employees.map(e => ({ ...e, present_days: Number(attendanceMap[e.id] || 0) }));
-  const selectedTop5 = requestedStages.length ? requestedStages.flatMap(stage => top5ByStage[stage] || []) : null;
+  const selectedTop5 = !isHr && requestedStages.length ? requestedStages.flatMap(stage => top5ByStage[stage] || []) : null;
 
   const sysCfg = await getSystemConfig();
   const absThreshold = Math.max(1, Number(sysCfg.payroll?.unauthorizedAbsenceThreshold) || 3);
 
-  // Admin & Supervisor dashboard: employees with >= configured unauthorized absence marks ("ب")
-  // within the selected period (strictly shift-scoped for supervisors).
+  // Admin, HR & Supervisor dashboard: employees with >= configured unauthorized absence marks ("ب")
+  // within the selected period (strictly shift-scoped for supervisors and company-scoped for HR).
   let unauthorizedAbsenceEmployees = [];
   if (isAdmin || isSupervisor) {
     const absenceParams = [];
@@ -265,6 +304,9 @@ router.get('/dashboard', requireAuth, async (req, res) => {
     } else if (isSupervisor) {
       if (!effectiveShifts.length) absenceWhere += ' AND 1=0';
       else absenceWhere = addIn(absenceWhere, absenceParams, 'UPPER(TRIM(COALESCE(e.shift,\'\')))', effectiveShifts);
+    }
+    if (hrCompanies) {
+      absenceWhere = addHrCompanySql(absenceWhere, absenceParams, 'e.company', hrCompanies);
     }
     absenceWhere += dateFilterSql('sd', from, to, absenceParams);
     unauthorizedAbsenceEmployees = (await db.prepare(`
@@ -298,8 +340,8 @@ router.get('/dashboard', requireAuth, async (req, res) => {
   };
 
   if (isAdmin || isSupervisor) {
-    payload.top5ByStage = top5ByStage;
-    payload.selectedTop5 = selectedTop5;
+    payload.top5ByStage = isHr ? {} : top5ByStage;
+    payload.selectedTop5 = isHr ? null : selectedTop5;
     payload.unauthorizedAbsenceEmployees = unauthorizedAbsenceEmployees;
   } else {
     payload.myRanks = sysCfg.displayAndFeatures?.showTop5ToEmployees === false
@@ -329,6 +371,10 @@ router.get('/:id', requireAuth, async (req, res) => {
   const supShifts = getSupervisorShifts(req);
   if (supShifts && !supShifts.includes(String(emp.shift || '').trim().toUpperCase())) {
     return res.status(403).json({ error: 'يمكن للمشرف عرض موظفي الشيفتات المسندة إليه فقط.' });
+  }
+  const hrCompanies = getHrCompanies(req);
+  if (hrCompanies && !companyMatchesList(emp.company, hrCompanies)) {
+    return res.status(403).json({ error: 'يمكن لمدير الموارد البشرية عرض موظفي الشركات المسندة إليه فقط.' });
   }
 
   let { from, to, stage, month } = req.query;
@@ -429,87 +475,116 @@ router.get('/:id', requireAuth, async (req, res) => {
   summary.exam_leave = attendance.exam_leave;
   summary.unclassified_absence = attendance.unclassified_absence;
 
-  const { top5ByStage } = await computeTop5ByStage(normalizeDate(from), normalizeDate(to), null);
-  const myRanks = myTop5Ranks(top5ByStage, targetId);
+  const isHrCaller = isHrManager(req);
+  let myRanks = [];
+  let supervisorTargets = {};
+  let stageTargets = {};
+  let shiftProfiles = [];
 
-  const supervisorTargets = await getSupervisorTargetDetails(targetId, emp.name, from, to);
-  let stageTargets = await getStageTargets(
-    targetId,
-    emp.target_shift || emp.shift,
-    from,
-    to,
-    month
-  );
+  if (!isHrCaller) {
+    const { top5ByStage } = await computeTop5ByStage(normalizeDate(from), normalizeDate(to), null);
+    myRanks = myTop5Ranks(top5ByStage, targetId);
 
-  // Safety net for employees imported before employee_stage_targets existed,
-  // or for an import where the target table was created but a target could not
-  // be read yet. The importer stores the complete stage snapshot in
-  // employee_shift_profiles, so the employee page can still display the exact
-  // target that came from the workbook. DB rows always win, which means a later
-  // import automatically replaces an old target.
-  {
-    const fallbackProfile = await db.prepare(
-      `SELECT profile_json FROM employee_shift_profiles WHERE employee_id = ? AND shift = ?`
-    ).get(targetId, String(emp.target_shift || emp.shift || 'Other').trim() || 'Other');
-    const stages = fallbackProfile?.profile_json?.stages || [];
-    for (const stage of stages) {
-      const value = Number(stage?.monthlyTarget);
-      if (!stage?.role || stage.role === 'الحضور') continue;
-      // Keep the database snapshot as the source of truth when it exists;
-      // only fill gaps from the imported profile snapshot.
-      if (stageTargets[stage.role] === undefined && Number.isFinite(value) && value > 0) {
-        stageTargets[stage.role] = value;
+    supervisorTargets = await getSupervisorTargetDetails(targetId, emp.name, from, to);
+    stageTargets = await getStageTargets(
+      targetId,
+      emp.target_shift || emp.shift,
+      from,
+      to,
+      month
+    );
+
+    // Safety net for employees imported before employee_stage_targets existed,
+    // or for an import where the target table was created but a target could not
+    // be read yet.
+    {
+      const fallbackProfile = await db.prepare(
+        `SELECT profile_json FROM employee_shift_profiles WHERE employee_id = ? AND shift = ?`
+      ).get(targetId, String(emp.target_shift || emp.shift || 'Other').trim() || 'Other');
+      const stages = fallbackProfile?.profile_json?.stages || [];
+      for (const stage of stages) {
+        const value = Number(stage?.monthlyTarget);
+        if (!stage?.role || stage.role === 'الحضور') continue;
+        if (stageTargets[stage.role] === undefined && Number.isFinite(value) && value > 0) {
+          stageTargets[stage.role] = value;
+        }
       }
     }
+
+    const shiftProfilesRows = await db.prepare(
+      `SELECT shift, profile_json
+         FROM employee_shift_profiles
+        WHERE employee_id = ?
+        ORDER BY CASE shift WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 WHEN 'D' THEN 4 ELSE 5 END, shift`
+    ).all(targetId);
+    shiftProfiles = shiftProfilesRows.map(r => {
+      const profile = r.profile_json || {};
+      return {
+        shift: r.shift,
+        stages: profile.stages || [],
+        summary: profile.summary || {},
+        employee: {
+          id: profile.id ?? targetId,
+          emp_num: profile.emp_num ?? emp.emp_num,
+          name: profile.name ?? emp.name,
+          education: profile.education ?? emp.education,
+          residence: profile.residence ?? emp.residence,
+          company: profile.company ?? emp.company,
+          shift: r.shift,
+          department: profile.department ?? emp.department,
+        }
+      };
+    });
   }
 
-  // Return every shift snapshot for this employee. The canonical employee
-  // profile/KPIs still come from employees + employee_summary, while duplicate
-  // shifts get their own daily details in the employee view.
-  const shiftProfilesRows = await db.prepare(
-    `SELECT shift, profile_json
-       FROM employee_shift_profiles
-      WHERE employee_id = ?
-      ORDER BY CASE shift WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 WHEN 'D' THEN 4 ELSE 5 END, shift`
-  ).all(targetId);
-  const shiftProfiles = shiftProfilesRows.map(r => {
-    const profile = r.profile_json || {};
-    return {
-      shift: r.shift,
-      stages: profile.stages || [],
-      summary: profile.summary || {},
-      employee: {
-        id: profile.id ?? targetId,
-        emp_num: profile.emp_num ?? emp.emp_num,
-        name: profile.name ?? emp.name,
-        education: profile.education ?? emp.education,
-        residence: profile.residence ?? emp.residence,
-        company: profile.company ?? emp.company,
-        shift: r.shift,
-        department: profile.department ?? emp.department,
-      }
-    };
-  });
-
   const isEmployeeCaller = req.user.role === 'employee';
-  const showRanks = !isEmployeeCaller || sysCfg.displayAndFeatures?.showTop5ToEmployees !== false;
-  const showBonus = !isEmployeeCaller || sysCfg.displayAndFeatures?.showBonusAndDeductionsToEmployee !== false;
+  const showRanks = !isHrCaller && (!isEmployeeCaller || sysCfg.displayAndFeatures?.showTop5ToEmployees !== false);
+  const showBonus = !isHrCaller && (!isEmployeeCaller || sysCfg.displayAndFeatures?.showBonusAndDeductionsToEmployee !== false);
 
-  const exposedSummary = showBonus
-    ? summary
-    : {
-        ...summary,
+  const exposedSummary = isHrCaller
+    ? {
+        total_achievement: null,
+        total_target: null,
+        percentage: null,
         bonus_tier: null,
+        unauthorized_absence: summary.unauthorized_absence ?? null,
+        total_absence: summary.total_absence ?? null,
         work_nature_allowance: null,
+        monthly_target: null,
+        total_present_days: summary.total_present_days ?? 0,
+        total_absence_days: summary.total_absence_days ?? 0,
+        casual_leave: summary.casual_leave ?? 0,
+        leave_with_permission: summary.leave_with_permission ?? 0,
+        leave_without_permission: summary.leave_without_permission ?? 0,
+        sick_leave: summary.sick_leave ?? 0,
+        exam_leave: summary.exam_leave ?? 0,
+        unclassified_absence: summary.unclassified_absence ?? 0,
+        late_days: summary.late_days ?? null,
+        late_hours: summary.late_hours ?? null,
+        overtime_days: summary.overtime_days ?? null,
+        overtime_hours: summary.overtime_hours ?? null,
         special_bonus_days: null,
         special_deductions: null,
-      };
+      }
+    : (showBonus
+        ? summary
+        : {
+            ...summary,
+            bonus_tier: null,
+            work_nature_allowance: null,
+            special_bonus_days: null,
+            special_deductions: null,
+          });
+
+  const exposedStages = isHrCaller
+    ? (byStage['الحضور'] ? { 'الحضور': byStage['الحضور'] } : {})
+    : byStage;
 
   res.json({
     employee: emp,
     summary: exposedSummary,
     attendance: { present_days: Number(attendance.present_days || 0), absent_days: Number(attendance.absent_days || 0) },
-    stages: byStage,
+    stages: exposedStages,
     stageTargets,
     shiftProfiles,
     myRanks: showRanks ? myRanks : [],

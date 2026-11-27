@@ -13,7 +13,7 @@ import {
 import { toast } from 'sonner';
 import { api, ApiError } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import type { RequestMetaPayload, RequestTypeKey } from '@/types/iems';
+import type { RequestCategoryKey, RequestMetaPayload, RequestTypeKey } from '@/types/iems';
 import { REQUEST_ALLOWED_FIELDS, REQUEST_CATALOG_MAP } from './requestCatalog';
 import { Button } from '@/components/ui/button';
 import { DatePicker } from '@/components/ui/date-picker';
@@ -38,11 +38,24 @@ interface AttachmentDraft {
   dataUrl: string;
 }
 
+export interface SubmittedRequestSummary {
+  id: number;
+  requestNumber: string;
+  requestTitle: string;
+  category?: RequestCategoryKey;
+  status: string;
+  submittedAt: string;
+  employeeName?: string;
+  employeeId?: number;
+  company?: string | null;
+  shift?: string | null;
+}
+
 interface RequestFormDialogProps {
   requestType: RequestTypeKey | null;
   meta: RequestMetaPayload | null;
   onClose: () => void;
-  onSubmitted: (requestNumber: string) => void;
+  onSubmitted: (summary: SubmittedRequestSummary) => void;
 }
 
 const DEFAULT_MAX_FILE_MB = 5;
@@ -184,6 +197,14 @@ function buildInitialFormData(
         smartRequestType: 'مفردات مرتب',
         notes: '',
       };
+    case 'medical_services':
+      return {
+        labName: 'معمل فحوصات',
+        recipientType: 'شخصي',
+        familyRelation: '',
+        labVisitDate: '',
+        phone: '',
+      };
     default:
       return {};
   }
@@ -218,7 +239,8 @@ export function RequestFormDialog({
   };
 
   const smartBusinessBlocked =
-    requestType === 'smart_business_request' && !isSmartBusiness(profile?.company);
+    (requestType === 'smart_business_request' || requestType === 'medical_services') &&
+    !isSmartBusiness(profile?.company);
   const advanceWindowBlocked = Boolean(
     requestType === 'advance_request' &&
       eligibility?.enforceAdvanceWindow &&
@@ -322,11 +344,44 @@ export function RequestFormDialog({
       toast.error('يجب قراءة الشروط والموافقة عليها أولاً.');
       return;
     }
+    if (requestType === 'medical_services') {
+      if (!String(formData.labName || '').trim()) {
+        toast.error('يرجى اختيار المعمل المطلوب.');
+        return;
+      }
+      if (!String(formData.recipientType || '').trim()) {
+        toast.error('يرجى تحديد لمن يوجّه الخطاب.');
+        return;
+      }
+      if (
+        formData.recipientType === 'أحد أفراد الأسرة' &&
+        !String(formData.familyRelation || '').trim()
+      ) {
+        toast.error('يرجى تحديد صلة القرابة.');
+        return;
+      }
+      if (!String(formData.labVisitDate || '').trim()) {
+        toast.error('يرجى تحديد تاريخ التوجه للمعمل.');
+        return;
+      }
+      const digitsOnly = String(formData.phone || '').replace(/[^\d]/g, '');
+      if (digitsOnly.length < 8 || digitsOnly.length > 15) {
+        toast.error('يرجى إدخال رقم هاتف صحيح.');
+        return;
+      }
+    }
 
     // Send strictly the allowed fields for this requestType
     const allowed = REQUEST_ALLOWED_FIELDS[requestType] || [];
     const payloadData: Record<string, unknown> = {};
     for (const k of allowed) {
+      if (
+        requestType === 'medical_services' &&
+        k === 'familyRelation' &&
+        formData.recipientType !== 'أحد أفراد الأسرة'
+      ) {
+        continue;
+      }
       const val = formData[k];
       if (val !== undefined && val !== null && val !== '') {
         payloadData[k] = val;
@@ -335,7 +390,17 @@ export function RequestFormDialog({
 
     setSubmitting(true);
     try {
-      const res = await api<{ ok: boolean; id: number; request_number: string }>('/api/requests', {
+      const res = await api<{
+        ok: boolean;
+        id: number;
+        request_number: string;
+        request_title?: string;
+        category?: RequestCategoryKey;
+        status?: string;
+        submitted_at?: string;
+        company?: string | null;
+        shift?: string | null;
+      }>('/api/requests', {
         method: 'POST',
         body: JSON.stringify({
           requestType,
@@ -343,8 +408,18 @@ export function RequestFormDialog({
           attachments,
         }),
       });
-      toast.success(`تم تقديم الطلب بنجاح (${res.request_number})`);
-      onSubmitted(res.request_number);
+      onSubmitted({
+        id: res.id,
+        requestNumber: res.request_number,
+        requestTitle: res.request_title || catalog.arabicTitle,
+        category: res.category || catalog.category,
+        status: res.status || 'submitted',
+        submittedAt: res.submitted_at || new Date().toISOString(),
+        employeeName: profile?.name,
+        employeeId: profile?.id,
+        company: res.company ?? profile?.company,
+        shift: res.shift ?? profile?.shift,
+      });
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'تعذر إرسال الطلب.');
     } finally {
@@ -1312,6 +1387,111 @@ export function RequestFormDialog({
                   value={String(formData.notes || '')}
                   onChange={(e) => setField('notes', e.target.value)}
                 />
+              </div>
+            </div>
+          )}
+
+          {requestType === 'medical_services' && (
+            <div className="space-y-3.5">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold">المعمل المطلوب *</Label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {(['معمل فحوصات', 'معمل النيل مصر'] as const).map((lab) => {
+                    const active = formData.labName === lab;
+                    return (
+                      <button
+                        key={lab}
+                        type="button"
+                        onClick={() => setField('labName', lab)}
+                        className={cn(
+                          'flex items-center justify-center rounded-lg border px-3 py-2.5 text-xs font-bold transition-colors cursor-pointer',
+                          active
+                            ? 'border-primary bg-primary text-primary-foreground'
+                            : 'border-border bg-card text-foreground hover:bg-muted'
+                        )}
+                      >
+                        {lab}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-xs font-bold">الخطاب موجّه لمن؟ *</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {(['شخصي', 'أحد أفراد الأسرة'] as const).map((target) => {
+                    const active = formData.recipientType === target;
+                    return (
+                      <button
+                        key={target}
+                        type="button"
+                        onClick={() => {
+                          setField('recipientType', target);
+                          if (target !== 'أحد أفراد الأسرة') {
+                            setField('familyRelation', '');
+                          }
+                        }}
+                        className={cn(
+                          'flex items-center justify-center rounded-lg border px-3 py-2.5 text-xs font-bold transition-colors cursor-pointer',
+                          active
+                            ? 'border-primary bg-primary text-primary-foreground'
+                            : 'border-border bg-card text-foreground hover:bg-muted'
+                        )}
+                      >
+                        {target}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {formData.recipientType === 'أحد أفراد الأسرة' && (
+                  <div className="space-y-1.5 rounded-lg border border-border bg-secondary/20 p-3">
+                    <Label className="text-xs font-bold">صلة القرابة *</Label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {(['أب', 'أم', 'أخ', 'أخت', 'ابن', 'ابنة'] as const).map((rel) => {
+                        const selected = formData.familyRelation === rel;
+                        return (
+                          <button
+                            key={rel}
+                            type="button"
+                            onClick={() => setField('familyRelation', rel)}
+                            className={cn(
+                              'rounded-md border px-3 py-1.5 text-xs font-bold transition-colors cursor-pointer',
+                              selected
+                                ? 'border-primary bg-primary text-primary-foreground'
+                                : 'border-border bg-card text-foreground hover:bg-muted'
+                            )}
+                          >
+                            {rel}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs font-bold">تاريخ التوجه للمعمل *</Label>
+                  <DatePicker
+                    value={String(formData.labVisitDate || '')}
+                    onChange={(v) => setField('labVisitDate', v)}
+                    placeholder="اختر تاريخ التوجه للمعمل"
+                    required
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs font-bold">رقم الهاتف *</Label>
+                  <Input
+                    value={String(formData.phone || '')}
+                    onChange={(e) => setField('phone', e.target.value)}
+                    placeholder="01XXXXXXXXX"
+                    dir="ltr"
+                    required
+                  />
+                </div>
               </div>
             </div>
           )}

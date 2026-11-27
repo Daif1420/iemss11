@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   Bell,
+  BookOpen,
   CheckCheck,
   ChevronDown,
   ChevronUp,
@@ -30,10 +31,12 @@ import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
 import { api, ApiError } from '@/lib/api';
+import { downloadSystemGuidePdf } from '@/lib/export';
 import { ROLE_LABELS, fmtDateTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { NotificationItem } from '@/types/iems';
 import { IemsLogo } from '@/components/shared/IemsLogo';
+import { PWAInstallButton } from '@/components/shared/PWAInstallButton';
 import { SeasonalScreenOverlay, SeasonalTopAccent } from '@/components/shared/SeasonalDecor';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -72,7 +75,16 @@ export function AppShell({
   beforeContent,
   maxWidthClass = 'max-w-[1400px]',
 }: AppShellProps) {
-  const { user, isCreator, isAdminUp, isSupervisorUp, isEmployee, updateUserProfile, logout } = useAuth();
+  const {
+    user,
+    isCreator,
+    isHrManager,
+    isAdminUp,
+    isSupervisorUp,
+    isEmployee,
+    updateUserProfile,
+    logout,
+  } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const location = useLocation();
   const navigate = useNavigate();
@@ -90,6 +102,20 @@ export function AppShell({
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [profileSaving, setProfileSaving] = useState(false);
+  const [guideDownloading, setGuideDownloading] = useState(false);
+
+  const handleDownloadGuide = async () => {
+    if (guideDownloading) return;
+    setGuideDownloading(true);
+    try {
+      await downloadSystemGuidePdf();
+      toast.success('تم بدء تحميل دليل النظام التعريفي (PDF)');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'تعذر تحميل دليل النظام');
+    } finally {
+      setGuideDownloading(false);
+    }
+  };
 
   const currentPath = location.pathname;
 
@@ -323,7 +349,9 @@ export function AppShell({
                     ? 'lg:min-w-0 lg:w-full lg:max-w-4xl'
                     : isAdminUp
                       ? 'lg:min-w-0 lg:w-full lg:max-w-3xl'
-                      : 'lg:min-w-0 lg:w-full lg:max-w-2xl'
+                      : isHrManager
+                        ? 'lg:min-w-0 lg:w-full lg:max-w-lg'
+                        : 'lg:min-w-0 lg:w-full lg:max-w-2xl'
                 )}
               >
                 <Link to="/home.html" className={navLinkClass(isHomeActive)}>
@@ -360,10 +388,12 @@ export function AppShell({
                   </DropdownMenuContent>
                 </DropdownMenu>
 
-                <Link to="/reports.html" className={navLinkClass(currentPath === '/reports.html')}>
-                  <FileBarChart2 className="h-3.5 w-3.5" />
-                  <span>التقارير</span>
-                </Link>
+                {!isHrManager && (
+                  <Link to="/reports.html" className={navLinkClass(currentPath === '/reports.html')}>
+                    <FileBarChart2 className="h-3.5 w-3.5" />
+                    <span>التقارير</span>
+                  </Link>
+                )}
 
                 <Link to="/requests.html" className={navLinkClass(currentPath === '/requests.html')}>
                   <FileText className="h-3.5 w-3.5" />
@@ -380,13 +410,15 @@ export function AppShell({
                   </Link>
                 )}
 
-                <Link
-                  to="/admin-import.html"
-                  className={navLinkClass(currentPath === '/admin-import.html')}
-                >
-                  <FileSpreadsheet className="h-3.5 w-3.5" />
-                  <span>تحديث البيانات</span>
-                </Link>
+                {!isHrManager && (
+                  <Link
+                    to="/admin-import.html"
+                    className={navLinkClass(currentPath === '/admin-import.html')}
+                  >
+                    <FileSpreadsheet className="h-3.5 w-3.5" />
+                    <span>تحديث البيانات</span>
+                  </Link>
+                )}
 
                 {isCreator && (
                   <DropdownMenu>
@@ -557,6 +589,22 @@ export function AppShell({
               )}
             </Button>
 
+            {/* System Guide PDF Download */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleDownloadGuide}
+              disabled={guideDownloading}
+              className="h-8 w-8 min-[360px]:h-9 min-[360px]:w-9 rounded-xl"
+              aria-label="تحميل دليل استخدام النظام PDF"
+              title="تحميل دليل استخدام النظام (PDF)"
+            >
+              <BookOpen className="h-4 w-4 text-[#065BAB] dark:text-blue-400" />
+            </Button>
+
+            {/* In-App PWA Install Button (hidden automatically in standalone mode) */}
+            <PWAInstallButton variant="icon" />
+
             {/* Unified Account Dropdown */}
             <DropdownMenu open={accountMenuOpen} onOpenChange={(o: boolean) => setAccountMenuOpen(o)}>
               <DropdownMenuTrigger asChild>
@@ -616,6 +664,13 @@ export function AppShell({
                   >
                     <User className="h-4 w-4 text-muted-foreground" />
                     <span>الملف الشخصي</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={handleDownloadGuide}
+                    className="rounded-lg px-3 py-2 text-xs font-semibold gap-2.5 cursor-pointer"
+                  >
+                    <BookOpen className="h-4 w-4 text-[#065BAB] dark:text-blue-400" />
+                    <span>دليل استخدام النظام (PDF)</span>
                   </DropdownMenuItem>
                   {isCreator && (
                     <DropdownMenuItem
@@ -721,14 +776,16 @@ export function AppShell({
                     <Home className="h-4 w-4 shrink-0" />
                     <span className="truncate">الرئيسية</span>
                   </Link>
-                  <Link
-                    to="/reports.html"
-                    onClick={() => setMobileNavOpen(false)}
-                    className={mobileDrawerItemClass(currentPath === '/reports.html')}
-                  >
-                    <FileBarChart2 className="h-4 w-4 shrink-0" />
-                    <span className="truncate">التقارير</span>
-                  </Link>
+                  {!isHrManager && (
+                    <Link
+                      to="/reports.html"
+                      onClick={() => setMobileNavOpen(false)}
+                      className={mobileDrawerItemClass(currentPath === '/reports.html')}
+                    >
+                      <FileBarChart2 className="h-4 w-4 shrink-0" />
+                      <span className="truncate">التقارير</span>
+                    </Link>
+                  )}
                   <Link
                     to="/requests.html"
                     onClick={() => setMobileNavOpen(false)}
@@ -747,17 +804,19 @@ export function AppShell({
                       <span className="truncate">الإدخال اليدوي</span>
                     </Link>
                   )}
-                  <Link
-                    to="/admin-import.html"
-                    onClick={() => setMobileNavOpen(false)}
-                    className={cn(
-                      mobileDrawerItemClass(currentPath === '/admin-import.html'),
-                      !isAdminUp && 'col-span-2 sm:col-span-1'
-                    )}
-                  >
-                    <FileSpreadsheet className="h-4 w-4 shrink-0" />
-                    <span className="truncate">تحديث البيانات</span>
-                  </Link>
+                  {!isHrManager && (
+                    <Link
+                      to="/admin-import.html"
+                      onClick={() => setMobileNavOpen(false)}
+                      className={cn(
+                        mobileDrawerItemClass(currentPath === '/admin-import.html'),
+                        !isAdminUp && 'col-span-2 sm:col-span-1'
+                      )}
+                    >
+                      <FileSpreadsheet className="h-4 w-4 shrink-0" />
+                      <span className="truncate">تحديث البيانات</span>
+                    </Link>
+                  )}
                 </div>
               </div>
 
@@ -817,6 +876,8 @@ export function AppShell({
                   </div>
                 </div>
               )}
+
+              <PWAInstallButton variant="menu-item" />
             </div>
           </nav>
         </div>
@@ -891,6 +952,14 @@ export function AppShell({
                   <div>
                     <div className="text-muted-foreground">الشيفت</div>
                     <div className="font-semibold text-foreground mt-0.5">{user.shift}</div>
+                  </div>
+                )}
+                {isHrManager && (user?.hrCompanies || user?.hr_companies || []).length > 0 && (
+                  <div className="col-span-2">
+                    <div className="text-muted-foreground">الشركات المسندة</div>
+                    <div className="font-bold text-primary mt-0.5">
+                      {(user?.hrCompanies || user?.hr_companies || []).join(' · ')}
+                    </div>
                   </div>
                 )}
                 {user?.department && (

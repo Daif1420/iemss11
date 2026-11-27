@@ -972,3 +972,39 @@ export function exportRequestsExcel(rows: RequestItem[]) {
   const stamp = new Date().toISOString().slice(0, 10);
   XLSX.writeFile(wb, `IEMS_Employee_Requests_${stamp}.xlsx`);
 }
+
+export async function downloadSystemGuidePdf(): Promise<void> {
+  const endpoints = ['/api/guide/pdf?download=1', '/IEMS_System_Guide.pdf'];
+  let blob: Blob | null = null;
+  for (const url of endpoints) {
+    try {
+      const res = await fetch(url, { credentials: 'same-origin' });
+      if (!res.ok) continue;
+      const ct = (res.headers.get('content-type') || '').toLowerCase();
+      if (ct.includes('text/html')) continue;
+      const b = await res.blob();
+      if (b.size > 1024) {
+        blob = b;
+        break;
+      }
+    } catch {
+      // try fallback url
+    }
+  }
+  if (!blob) {
+    throw new Error('تعذر تحميل ملف الدليل التعريفي (PDF)');
+  }
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = 'IEMS_System_Guide.pdf';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 15000);
+  }
+}
+

@@ -1,7 +1,20 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const db = require('../database/init');
-const { requireAuth, requireAdmin, requireSupervisor, requireUploader, requireSystemCreator } = require('../middleware/auth');
+const {
+  requireAuth,
+  requireAdmin,
+  requireAdminOrHr,
+  requireSupervisor,
+  requireUploader,
+  requireSystemCreator,
+  isAdminOrHr,
+  isHrManager,
+  normalizeCompaniesList,
+  getHrCompanies,
+  companyMatchesList,
+  addHrCompanySql,
+} = require('../middleware/auth');
 const { parseMasterWorkbook } = require('../utils/master-import');
 const { computeTop5ByStage } = require('./employee');
 const {
@@ -708,7 +721,7 @@ router.post('/import-master', requireAuth, requireUploader, async (req, res) => 
 });
 
 // Durable import history. Available to full admins and supervisors who can import.
-router.get('/import-history', requireAuth, requireSupervisor, async (req, res) => {
+router.get('/import-history', requireAuth, requireUploader, async (req, res) => {
   const rows = await db.prepare(`
     SELECT id, imported_by, imported_by_name, filename, month_start, updated_count, created_count, daily_count, skipped_count,
            supervisor_linked, supervisor_unmatched, status, details_json, created_at
@@ -815,30 +828,49 @@ router.post('/employee/:id/reset-password', requireAuth, requireSystemCreator, a
 // so the full-control admin can see and change everyone's permission level.
 router.get('/employees', requireAuth, requireSupervisor, async (req, res) => {
   const scoped = req.user.role === 'supervisor';
+  const hrCompanies = getHrCompanies(req);
+  const hrScoped = Boolean(hrCompanies);
+
+  let whereSql = '1=1';
+  const params = [];
+  if (scoped) {
+    whereSql = "role = 'employee' AND shift = ANY(?::text[])";
+    params.push(
+      Array.isArray(req.user.supervisorShifts) && req.user.supervisorShifts.length
+        ? req.user.supervisorShifts
+        : [String(req.user.shift || '').trim()]
+    );
+  } else if (hrScoped) {
+    whereSql = "role = 'employee'";
+    whereSql = addHrCompanySql(whereSql, params, 'company', hrCompanies);
+  }
+
   const rows = (await db.prepare(`
-    SELECT id, emp_num, name, education, residence, company, shift, department, role, must_change_password, status, left_date, departure_reason, created_at, supervisor_shifts
+    SELECT id, emp_num, name, education, residence, company, shift, department, role, must_change_password, status, left_date, departure_reason, created_at, supervisor_shifts, hr_companies
     FROM employees
-    WHERE ${scoped ? "role = 'employee' AND shift = ANY(?::text[])" : '1=1'}
+    WHERE ${whereSql}
     ORDER BY name
-  `).all(...(scoped ? [Array.isArray(req.user.supervisorShifts)&&req.user.supervisorShifts.length ? req.user.supervisorShifts : [String(req.user.shift || '').trim()]] : [])));
+  `).all(...params));
   const total = rows.filter(r => r.role === 'employee' && (r.status || 'active') === 'active').length;
   const primaryAdminId = await getPrimaryAdminId();
 
   // Mark employees who currently hold a Top 5 rank in at least one stage
-  // (company-wide, across the full dataset) so the management table can
-  // highlight them without opening each employee's profile.
+  // (skipped for hr_manager since target/rank data is hidden from HR).
   let top5Ids = new Set();
-  try {
-    const { top5ByStage } = await computeTop5ByStage(null, null, [], []);
-    for (const stageRows of Object.values(top5ByStage)) {
-      for (const r of stageRows) top5Ids.add(Number(r.id));
-    }
-  } catch (e) { /* non-fatal: table just renders without the badge */ }
+  if (!hrScoped) {
+    try {
+      const { top5ByStage } = await computeTop5ByStage(null, null, [], []);
+      for (const stageRows of Object.values(top5ByStage)) {
+        for (const r of stageRows) top5Ids.add(Number(r.id));
+      }
+    } catch (e) { /* non-fatal: table just renders without the badge */ }
+  }
 
   const withFlags = rows.map(r => ({
     ...r,
+    hr_companies: Array.isArray(r.hr_companies) ? r.hr_companies : [],
     is_primary_admin: primaryAdminId !== null && r.id === primaryAdminId,
-    is_top5: top5Ids.has(Number(r.id)),
+    is_top5: hrScoped ? false : top5Ids.has(Number(r.id)),
   }));
   res.json({ employees: withFlags, total });
 });
@@ -860,7 +892,7 @@ router.patch('/employee/:id/role', requireAuth, requireAdmin, async (req, res) =
   if (!Number.isInteger(targetId)) return res.status(400).json({ error: 'رقم موظف غير صالح.' });
 
   const { role } = req.body || {};
-  const allowedRoles = ['system_creator', 'admin', 'supervisor', 'employee'];
+  const allowedRoles = ['system_creator', 'admin', 'hr_manager', 'supervisor', 'employee'];
   if (!allowedRoles.includes(role)) return res.status(400).json({ error: 'صلاحية غير صالحة.' });
 
   if (req.user.id === targetId) {
@@ -900,9 +932,20 @@ router.patch('/employee/:id/role', requireAuth, requireAdmin, async (req, res) =
     if (!supervisorShifts.length) return res.status(400).json({ error: 'اختر شيفتًا واحدًا على الأقل للمشرف.' });
   }
   if (role !== 'supervisor') supervisorShifts = [];
-  await db.prepare('UPDATE employees SET role = ?, supervisor_shifts = ?::text[] WHERE id = ?').run(role, supervisorShifts, targetId);
-  await writeAudit(req, 'change_role', 'employee', targetId, { from: target.role, to: role });
-  res.json({ ok: true, message: 'تم تحديث الصلاحية بنجاح.', role, supervisorShifts: supervisorShifts || [] });
+
+  let hrCompanies = [];
+  if (role === 'hr_manager') {
+    const rawCompanies = Array.isArray(req.body?.hrCompanies) ? req.body.hrCompanies : [];
+    hrCompanies = normalizeCompaniesList(rawCompanies, null);
+    if (!hrCompanies.length) {
+      return res.status(400).json({ error: 'اختر شركة واحدة على الأقل لصلاحية مدير الموارد البشرية.' });
+    }
+  }
+
+  await db.prepare('UPDATE employees SET role = ?, supervisor_shifts = ?::text[], hr_companies = ?::text[] WHERE id = ?')
+    .run(role, supervisorShifts, hrCompanies, targetId);
+  await writeAudit(req, 'change_role', 'employee', targetId, { from: target.role, to: role, supervisorShifts, hrCompanies });
+  res.json({ ok: true, message: 'تم تحديث الصلاحية بنجاح.', role, supervisorShifts: supervisorShifts || [], hrCompanies });
 });
 
 // Company-wide (or supervisor-shift-scoped) overview stats for the management dashboard
@@ -932,6 +975,7 @@ router.get('/overview', requireAuth, requireSupervisor, async (req, res) => {
     ? (requestedShift ? supShifts.filter((s) => s === requestedShift) : supShifts)
     : (requestedShift ? [requestedShift] : null);
 
+  const hrCompanies = getHrCompanies(req);
   let shiftSql = '';
   let shiftParams = [];
   if (effectiveShifts !== null) {
@@ -941,6 +985,9 @@ router.get('/overview', requireAuth, requireSupervisor, async (req, res) => {
       shiftSql = ` AND UPPER(TRIM(COALESCE(e.shift,''))) IN (${effectiveShifts.map(() => '?').join(',')})`;
       shiftParams = [...effectiveShifts];
     }
+  }
+  if (hrCompanies) {
+    shiftSql = addHrCompanySql(shiftSql, shiftParams, 'e.company', hrCompanies);
   }
 
   const count = async (extraSql = '', extraParams = []) => {
@@ -1101,10 +1148,10 @@ router.patch('/employee/:id', requireAuth, requireSystemCreator, async (req, res
 const DEPARTURE_REASONS=['استقالة','كثرة الغياب عن العمل','ضعف الأداء / عدم تحقيق التارجت','مخالفة لوائح العمل','مخالفة إدارية / سلوكية','ترك العمل بدون إخطار','خدمة الوطن (الجيش)'];
 function normalizeDepartureReason(value){ return String(value ?? '').replace(/\s+/g,' ').trim(); }
 function isValidDepartureDate(value){ const d=String(value ?? '').trim(); if(!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false; const [y,m,day]=d.split('-').map(Number); const dt=new Date(Date.UTC(y,m-1,day)); return dt.getUTCFullYear()===y && dt.getUTCMonth()===m-1 && dt.getUTCDate()===day; }
-router.get('/employee/:id/departure',requireAuth,requireSupervisor,async(req,res)=>{const id=Number(req.params.id);const emp=await db.prepare("SELECT id,role,shift,left_date,departure_reason,status FROM employees WHERE id=?").get(id);if(!emp||emp.role!=='employee')return res.status(404).json({error:'الموظف غير موجود.'});if(req.user.role==='supervisor'){const allowed=Array.isArray(req.user.supervisorShifts)&&req.user.supervisorShifts.length?req.user.supervisorShifts:[req.user.shift||''];if(!allowed.includes(String(emp.shift||'')))return res.status(403).json({error:'لا يمكنك الوصول إلى موظف خارج الشيفتات المسندة إليك.'});}res.json({departure:{leftDate:emp.left_date?String(emp.left_date).slice(0,10):'',reason:emp.departure_reason||'',status:emp.status||'active'}})});
-router.patch('/employee/:id/departure',requireAuth,requireSupervisor,async(req,res)=>{const id=Number(req.params.id);const emp=await db.prepare("SELECT id,role,shift FROM employees WHERE id=?").get(id);if(!emp||emp.role!=='employee')return res.status(404).json({error:'الموظف غير موجود.'});if(req.user.role==='supervisor'){const allowed=Array.isArray(req.user.supervisorShifts)&&req.user.supervisorShifts.length?req.user.supervisorShifts:[req.user.shift||''];if(!allowed.includes(String(emp.shift||'')))return res.status(403).json({error:'لا يمكنك تسجيل مغادرة موظف خارج الشيفتات المسندة إليك.'});}const sysCfg=await getSystemConfig();const configuredReasons=[...new Set([...(sysCfg.departmentsAndLists?.departureReasons||[]),...DEPARTURE_REASONS])];const d=String(req.body?.leftDate||'').trim(),r=normalizeDepartureReason(req.body?.reason);const matchedReason=configuredReasons.find(x=>normalizeDepartureReason(x)===r);if(!isValidDepartureDate(d)||!matchedReason)return res.status(400).json({error:!isValidDepartureDate(d)?'تاريخ المغادرة غير صالح.': 'اختر سبب مغادرة صحيح.'});await db.prepare("UPDATE employees SET status='left',left_date=?,departure_reason=? WHERE id=?").run(d,matchedReason,id);await writeAudit(req,'mark_employee_left','employee',id,{left_date:d,departure_reason:matchedReason});res.json({ok:true,departure:{leftDate:d,reason:matchedReason}})});
+router.get('/employee/:id/departure',requireAuth,requireSupervisor,async(req,res)=>{const id=Number(req.params.id);const emp=await db.prepare("SELECT id,role,shift,company,left_date,departure_reason,status FROM employees WHERE id=?").get(id);if(!emp||emp.role!=='employee')return res.status(404).json({error:'الموظف غير موجود.'});if(req.user.role==='supervisor'){const allowed=Array.isArray(req.user.supervisorShifts)&&req.user.supervisorShifts.length?req.user.supervisorShifts:[req.user.shift||''];if(!allowed.includes(String(emp.shift||'')))return res.status(403).json({error:'لا يمكنك الوصول إلى موظف خارج الشيفتات المسندة إليك.'});}const hrCompanies=getHrCompanies(req);if(hrCompanies&&!companyMatchesList(emp.company,hrCompanies))return res.status(403).json({error:'لا يمكنك الوصول إلى موظف خارج الشركة المسندة إليك.'});res.json({departure:{leftDate:emp.left_date?String(emp.left_date).slice(0,10):'',reason:emp.departure_reason||'',status:emp.status||'active'}})});
+router.patch('/employee/:id/departure',requireAuth,requireSupervisor,async(req,res)=>{const id=Number(req.params.id);const emp=await db.prepare("SELECT id,role,shift,company FROM employees WHERE id=?").get(id);if(!emp||emp.role!=='employee')return res.status(404).json({error:'الموظف غير موجود.'});if(req.user.role==='supervisor'){const allowed=Array.isArray(req.user.supervisorShifts)&&req.user.supervisorShifts.length?req.user.supervisorShifts:[req.user.shift||''];if(!allowed.includes(String(emp.shift||'')))return res.status(403).json({error:'لا يمكنك تسجيل مغادرة موظف خارج الشيفتات المسندة إليك.'});}const hrCompanies=getHrCompanies(req);if(hrCompanies&&!companyMatchesList(emp.company,hrCompanies))return res.status(403).json({error:'لا يمكنك تسجيل مغادرة موظف خارج الشركة المسندة إليك.'});const sysCfg=await getSystemConfig();const configuredReasons=[...new Set([...(sysCfg.departmentsAndLists?.departureReasons||[]),...DEPARTURE_REASONS])];const d=String(req.body?.leftDate||'').trim(),r=normalizeDepartureReason(req.body?.reason);const matchedReason=configuredReasons.find(x=>normalizeDepartureReason(x)===r);if(!isValidDepartureDate(d)||!matchedReason)return res.status(400).json({error:!isValidDepartureDate(d)?'تاريخ المغادرة غير صالح.': 'اختر سبب مغادرة صحيح.'});await db.prepare("UPDATE employees SET status='left',left_date=?,departure_reason=? WHERE id=?").run(d,matchedReason,id);await writeAudit(req,'mark_employee_left','employee',id,{left_date:d,departure_reason:matchedReason});res.json({ok:true,departure:{leftDate:d,reason:matchedReason}})});
 router.patch('/employee/:id/reactivate',requireAuth,requireSystemCreator,async(req,res)=>{const id=Number(req.params.id);await db.prepare("UPDATE employees SET status='active',left_date=NULL,departure_reason=NULL WHERE id=? AND role='employee'").run(id);await writeAudit(req,'reactivate_employee','employee',id,{});res.json({ok:true})});
-router.get('/employee-group/:group',requireAuth,requireSupervisor,async(req,res)=>{const g=String(req.params.group||'all');if(!['all','current','left','archive'].includes(g))return res.status(400).json({error:'تصنيف غير صالح.'});const sc=req.user.role==='supervisor', supervisorShifts=Array.isArray(req.user.supervisorShifts)&&req.user.supervisorShifts.length?req.user.supervisorShifts:[req.user.shift||''], ps=sc?supervisorShifts:[], sq=sc?` AND e.shift = ANY(?::text[])`:'';let st='';if(g==='current')st=" AND COALESCE(e.status,'active')='active'";if(g==='left')st=" AND e.status='left'";if(g==='archive')st=" AND e.status='archive'";const rows=await db.prepare(`SELECT id,emp_num,name,education,company,shift,department,status,left_date,departure_reason,created_at,supervisor_shifts FROM employees e WHERE e.role='employee'${sq}${st} ORDER BY name`).all(...ps);res.json({employees:rows,total:rows.length,group:g})});
+router.get('/employee-group/:group',requireAuth,requireSupervisor,async(req,res)=>{const g=String(req.params.group||'all');if(!['all','current','left','archive'].includes(g))return res.status(400).json({error:'تصنيف غير صالح.'});const sc=req.user.role==='supervisor', supervisorShifts=Array.isArray(req.user.supervisorShifts)&&req.user.supervisorShifts.length?req.user.supervisorShifts:[req.user.shift||''], ps=sc?[supervisorShifts]:[];let sq=sc?` AND e.shift = ANY(?::text[])`:'';const hrCompanies=getHrCompanies(req);if(hrCompanies){sq=addHrCompanySql(sq,ps,'e.company',hrCompanies);}let st='';if(g==='current')st=" AND COALESCE(e.status,'active')='active'";if(g==='left')st=" AND e.status='left'";if(g==='archive')st=" AND e.status='archive'";const rows=await db.prepare(`SELECT id,emp_num,name,education,company,shift,department,status,left_date,departure_reason,created_at,supervisor_shifts,hr_companies FROM employees e WHERE e.role='employee'${sq}${st} ORDER BY name`).all(...ps);res.json({employees:rows,total:rows.length,group:g})});
 // ---- Manual entry (data-entry screen, alternative to uploading the Master Excel sheet) ----
 
 // Reference data for the manual-entry screen: known employees, stage names
@@ -1122,23 +1169,58 @@ router.get('/manual/meta', requireAuth, requireAdmin, async (req, res) => {
 // in the Master sheet's employee-info columns). If `id` matches an existing
 // employee it's updated; otherwise a new employee is created with the
 // default password (same behaviour as a fresh row in the Excel import).
-router.post('/manual/employee', requireAuth, requireAdmin, async (req, res) => {
-  let { id, emp_num, name, education, residence, company, shift, department } = req.body || {};
+router.post('/manual/employee', requireAuth, requireAdminOrHr, async (req, res) => {
+  let { id, emp_num, name, education, residence, company, shift, department, createOnly } = req.body || {};
   id = Number(id);
   if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'رقم الموظف (ID) غير صالح.' });
-  if (!name || !String(name).trim()) return res.status(400).json({ error: 'اسم الموظف مطلوب.' });
+  const cleanName = typeof name === 'string' ? name.trim() : '';
+  if (!cleanName) return res.status(400).json({ error: 'اسم الموظف مطلوب.' });
+
+  const cleanEmpNum = emp_num !== undefined && emp_num !== null && String(emp_num).trim() !== ''
+    ? Number(emp_num)
+    : id;
+  if (!Number.isInteger(cleanEmpNum) || cleanEmpNum <= 0) {
+    return res.status(400).json({ error: 'كود الموظف غير صالح.' });
+  }
+
+  const cleanEducation = typeof education === 'string' && education.trim() ? education.trim() : null;
+  const cleanResidence = typeof residence === 'string' && residence.trim() ? residence.trim() : null;
+  const cleanCompany = typeof company === 'string' && company.trim() ? company.trim() : null;
+  const cleanShift = typeof shift === 'string' && shift.trim() ? shift.trim() : null;
+  const cleanDepartment = typeof department === 'string' && department.trim() ? department.trim() : null;
+  const upperShift = cleanShift ? cleanShift.toUpperCase() : '';
+  const targetShift = ['A', 'B', 'C', 'D'].includes(upperShift) ? upperShift : 'Other';
 
   try {
-    const existing = (await db.prepare('SELECT id, role FROM employees WHERE id = ?').get(id));
+    const existing = await db.prepare('SELECT id, role, company FROM employees WHERE id = ?').get(id);
+    if (createOnly && existing) {
+      return res.status(409).json({ error: 'رقم الموظف (ID) مسجل بالفعل لموظف آخر.' });
+    }
     if (existing && existing.role !== 'employee') {
-      return res.status(403).json({ error: 'لا يمكن تعديل حساب أدمن من شاشة الإدخال اليدوي.' });
+      return res.status(403).json({ error: 'لا يمكن تعديل حساب إداري من هذه الشاشة.' });
+    }
+
+    const hrCompanies = getHrCompanies(req);
+    if (hrCompanies) {
+      if (!cleanCompany || !companyMatchesList(cleanCompany, hrCompanies)) {
+        return res.status(403).json({ error: 'يمكن لمدير الموارد البشرية إضافة أو تعديل موظفي الشركات المسندة إليه فقط.' });
+      }
+      if (existing && !companyMatchesList(existing.company, hrCompanies)) {
+        return res.status(403).json({ error: 'لا يمكنك تعديل موظف خارج الشركات المسندة إليك.' });
+      }
     }
 
     if (existing) {
-      (await db.prepare(`
-        UPDATE employees SET emp_num = ?, name = ?, education = ?, residence = ?, company = ?, shift = ?, department = ?
+      await db.prepare(`
+        UPDATE employees SET emp_num = ?, name = ?, education = ?, residence = ?, company = ?, shift = ?, target_shift = ?, department = ?
         WHERE id = ?
-      `).run(emp_num || id, String(name).trim(), education || null, residence || null, company || null, shift || null, department || null, id));
+      `).run(cleanEmpNum, cleanName, cleanEducation, cleanResidence, cleanCompany, cleanShift, targetShift, cleanDepartment, id);
+      await writeAudit(req, 'update_employee_manual', 'employee', id, {
+        name: cleanName,
+        company: cleanCompany,
+        shift: cleanShift,
+        department: cleanDepartment,
+      });
       return res.json({ ok: true, created: false, message: 'تم تحديث بيانات الموظف.' });
     }
 
@@ -1146,11 +1228,17 @@ router.post('/manual/employee', requireAuth, requireAdmin, async (req, res) => {
     const configuredPw = sysCfg.general?.defaultPassword || DEFAULT_PASSWORD;
     const requireChange = Boolean(sysCfg.general?.requirePasswordChangeOnFirstLogin);
     const hash = bcrypt.hashSync(configuredPw, 10);
-    (await db.prepare(`
-      INSERT INTO employees (id, emp_num, name, education, residence, company, shift, department, password_hash, role, must_change_password)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'employee', ?)
-    `).run(id, emp_num || id, String(name).trim(), education || null, residence || null, company || null, shift || null, department || null, hash, requireChange));
-    res.json({ ok: true, created: true, defaultPassword: configuredPw, message: 'تم إنشاء الموظف بكلمة مرور افتراضية.' });
+    await db.prepare(`
+      INSERT INTO employees (id, emp_num, name, education, residence, company, shift, target_shift, department, password_hash, role, must_change_password, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'employee', ?, 'active')
+    `).run(id, cleanEmpNum, cleanName, cleanEducation, cleanResidence, cleanCompany, cleanShift, targetShift, cleanDepartment, hash, requireChange);
+    await writeAudit(req, 'create_employee_manual', 'employee', id, {
+      name: cleanName,
+      company: cleanCompany,
+      shift: cleanShift,
+      department: cleanDepartment,
+    });
+    res.json({ ok: true, created: true, defaultPassword: configuredPw, message: 'تم إضافة الموظف بنجاح بكلمة مرور افتراضية.' });
   } catch (err) {
     console.error('Manual employee upsert error:', err);
     res.status(400).json({ error: 'تعذر حفظ بيانات الموظف. تأكد أن الـID غير مستخدم.' });
@@ -1316,6 +1404,9 @@ router.post('/manual/supervisor-target', requireAuth, requireAdmin, async (req, 
 
 // Distinct stage names recorded in stage_daily, for the report stage filter.
 router.get('/report/stages', requireAuth, async (req, res) => {
+  if (isHrManager(req)) {
+    return res.status(403).json({ error: 'تقارير التارجت غير متاحة لصلاحية مدير الموارد البشرية.' });
+  }
   const rows = (await db.prepare(`SELECT DISTINCT stage FROM stage_daily WHERE stage <> 'TOTAL TARGET %' ORDER BY stage`).all());
   res.json({ stages: rows.map(r => r.stage) });
 });
@@ -1324,12 +1415,15 @@ router.get('/report/stages', requireAuth, async (req, res) => {
 // selected stage, returning achieved total, uploaded sheet target for that stage,
 // achievement percentage ((achieved / sheet_target) * 100), and shift breakdown.
 router.get('/report/attendance', requireAuth, async (req, res) => {
+  if (isHrManager(req)) {
+    return res.status(403).json({ error: 'تقارير التارجت غير متاحة لصلاحية مدير الموارد البشرية.' });
+  }
   const { from, to } = req.query;
   const stages = parseList(req.query.stage).filter(
     (s) => s !== '__ALL__' && s !== 'الحضور' && s !== 'TOTAL TARGET %'
   );
   const requestedShifts = parseList(req.query.shift);
-  const isAdmin = req.user.role === 'admin' || req.user.role === 'system_creator';
+  const isAdmin = isAdminOrHr(req);
   const isSupervisor = req.user.role === 'supervisor';
   const isEmployee = req.user.role === 'employee';
   const supShifts = Array.isArray(req.user.supervisorShifts) && req.user.supervisorShifts.length

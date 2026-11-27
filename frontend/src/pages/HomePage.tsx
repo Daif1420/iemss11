@@ -98,7 +98,9 @@ export function HomePage() {
   const {
     user,
     isCreator,
+    isHrManager,
     isAdminUp,
+    isAdminOrHr,
     isSupervisorUp,
     isEmployee,
     publicConfig: authPublicConfig,
@@ -175,7 +177,10 @@ export function HomePage() {
       {isSupervisorUp ? (
         <ManagementHomeView
           isCreator={isCreator}
+          isHrManager={isHrManager}
           isAdminUp={isAdminUp}
+          isAdminOrHr={isAdminOrHr}
+          hrCompanies={user?.hrCompanies || user?.hr_companies || []}
           userName={user?.name}
           publicConfig={effectivePublicConfig}
           navigate={navigate}
@@ -193,17 +198,23 @@ export function HomePage() {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Admin / System Creator / Supervisor Home View
+// 1. Admin / System Creator / HR Manager / Supervisor Home View
 // ---------------------------------------------------------------------------
 function ManagementHomeView({
   isCreator,
+  isHrManager,
   isAdminUp,
+  isAdminOrHr,
+  hrCompanies,
   userName,
   publicConfig,
   navigate,
 }: {
   isCreator: boolean;
+  isHrManager: boolean;
   isAdminUp: boolean;
+  isAdminOrHr: boolean;
+  hrCompanies: string[];
   userName?: string;
   publicConfig: PublicSystemConfigPayload | null;
   navigate: ReturnType<typeof useNavigate>;
@@ -217,7 +228,7 @@ function ManagementHomeView({
   const cycleEndDay = publicConfig?.payroll?.cycleEndDay ?? 20;
   const monthDaysCount = publicConfig?.reportsAndSheets?.monthDaysCount ?? 'auto';
   const absThreshold = publicConfig?.payroll?.unauthorizedAbsenceThreshold ?? 3;
-  const canExportTable = isAdminUp || (publicConfig?.displayAndFeatures?.allowSupervisorExport ?? true);
+  const canExportTable = isAdminOrHr || (publicConfig?.displayAndFeatures?.allowSupervisorExport ?? true);
 
   // Active Filter State
   const [from, setFrom] = useState('');
@@ -586,6 +597,7 @@ function ManagementHomeView({
         <GlobalSearchBar
           isAdminUp={isAdminUp}
           isCreator={isCreator}
+          isHrManager={isHrManager}
           companies={companiesMeta}
           departments={departmentsMeta}
           fallbackEmployees={attendance?.employees || []}
@@ -628,9 +640,9 @@ function ManagementHomeView({
           <span className="text-[11px] font-bold text-muted-foreground ml-1">اختصارات سريعة:</span>
           {[
             { label: 'طلبات الموظفين', to: '/requests.html', icon: FileText, show: true },
-            { label: 'التقارير', to: '/reports.html', icon: FileBarChart2, show: true },
+            { label: 'التقارير', to: '/reports.html', icon: FileBarChart2, show: !isHrManager },
             { label: 'الإدخال اليدوي', to: '/admin-manual-entry.html', icon: PenSquare, show: isAdminUp },
-            { label: 'تحديث البيانات', to: '/admin-import.html', icon: FileSpreadsheet, show: true },
+            { label: 'تحديث البيانات', to: '/admin-import.html', icon: FileSpreadsheet, show: !isHrManager },
             { label: 'دليل الموظفين', to: '/admin-employees.html?status=active', icon: Users, show: true },
             { label: 'الموظفون الجدد', to: '/employees-new.html', icon: UserPlus, show: true },
             { label: 'سجل المغادرين', to: '/employees-left.html', icon: UserMinus, show: true },
@@ -711,13 +723,22 @@ function ManagementHomeView({
 
             <div className="space-y-1">
               <span className="text-[11px] font-semibold text-muted-foreground block">الشركة</span>
-              <MultiFilterPopover
-                label="الشركة"
-                allLabel="كل الشركات"
-                options={companiesMeta.map((c) => ({ value: c, label: c }))}
-                selected={selectedCompanies}
-                onChange={setSelectedCompanies}
-              />
+              {isHrManager && companiesMeta.length === 1 ? (
+                <Input
+                  value={companiesMeta[0]}
+                  readOnly
+                  disabled
+                  className="h-9 text-xs bg-muted/50 font-bold"
+                />
+              ) : (
+                <MultiFilterPopover
+                  label="الشركة"
+                  allLabel={isHrManager ? 'كل الشركات المسندة' : 'كل الشركات'}
+                  options={companiesMeta.map((c) => ({ value: c, label: c }))}
+                  selected={selectedCompanies}
+                  onChange={setSelectedCompanies}
+                />
+              )}
             </div>
 
             <div className="space-y-1">
@@ -733,12 +754,12 @@ function ManagementHomeView({
               />
             </div>
 
-            {(isAdminUp || shiftsMeta.length > 0) && (
+            {(isAdminOrHr || shiftsMeta.length > 0) && (
               <div className="space-y-1">
                 <span className="text-[11px] font-semibold text-muted-foreground block">
                   الشيفت
                 </span>
-                {!isAdminUp && shiftsMeta.length === 1 ? (
+                {!isAdminOrHr && shiftsMeta.length === 1 ? (
                   <Input
                     value={`Shift ${shiftsMeta[0]}`}
                     readOnly
@@ -748,7 +769,7 @@ function ManagementHomeView({
                 ) : (
                   <MultiFilterPopover
                     label="الشيفت"
-                    allLabel={isAdminUp ? 'كل الشيفتات' : 'كل الشيفتات المسندة'}
+                    allLabel={isAdminOrHr ? 'كل الشيفتات' : 'كل الشيفتات المسندة'}
                     options={shiftsMeta.map((s) => ({ value: s, label: s }))}
                     selected={selectedShifts}
                     onChange={setSelectedShifts}
@@ -813,34 +834,42 @@ function ManagementHomeView({
                           onClick: () => navigate('/admin-employees.html?status=active'),
                           active: false,
                         },
-                        {
-                          label: 'سمارت بيزنس',
-                          value: fmtNumber(overview.smart),
-                          sub:
-                            overview.total > 0
-                              ? `${Math.round((overview.smart / overview.total) * 100)}% من الإجمالي`
-                              : 'شركة سمارت بيزنس',
-                          icon: Building2,
-                          iconClass: 'text-muted-foreground',
-                          valClass: 'text-foreground',
-                          onClick: () =>
-                            navigate('/admin-employees.html?status=active&company=smart'),
-                          active: false,
-                        },
-                        {
-                          label: 'برافوس',
-                          value: fmtNumber(overview.bravos),
-                          sub:
-                            overview.total > 0
-                              ? `${Math.round((overview.bravos / overview.total) * 100)}% من الإجمالي`
-                              : 'شركة برافوس',
-                          icon: Briefcase,
-                          iconClass: 'text-muted-foreground',
-                          valClass: 'text-foreground',
-                          onClick: () =>
-                            navigate('/admin-employees.html?status=active&company=bravos'),
-                          active: false,
-                        },
+                        ...(!isHrManager || hrCompanies.some((c) => c.toUpperCase().includes('SMART'))
+                          ? [
+                              {
+                                label: 'سمارت بيزنس',
+                                value: fmtNumber(overview.smart),
+                                sub:
+                                  overview.total > 0
+                                    ? `${Math.round((overview.smart / overview.total) * 100)}% من الإجمالي`
+                                    : 'شركة سمارت بيزنس',
+                                icon: Building2,
+                                iconClass: 'text-muted-foreground',
+                                valClass: 'text-foreground',
+                                onClick: () =>
+                                  navigate('/admin-employees.html?status=active&company=smart'),
+                                active: false,
+                              },
+                            ]
+                          : []),
+                        ...(!isHrManager || hrCompanies.some((c) => c.toUpperCase().includes('BRAVOS'))
+                          ? [
+                              {
+                                label: 'برافوس',
+                                value: fmtNumber(overview.bravos),
+                                sub:
+                                  overview.total > 0
+                                    ? `${Math.round((overview.bravos / overview.total) * 100)}% من الإجمالي`
+                                    : 'شركة برافوس',
+                                icon: Briefcase,
+                                iconClass: 'text-muted-foreground',
+                                valClass: 'text-foreground',
+                                onClick: () =>
+                                  navigate('/admin-employees.html?status=active&company=bravos'),
+                                active: false,
+                              },
+                            ]
+                          : []),
                         {
                           label: 'الطلاب',
                           value: fmtNumber(overview.students),

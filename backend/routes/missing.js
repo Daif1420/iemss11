@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('../database/init');
-const { requireAuth, requireSupervisor } = require('../middleware/auth');
+const { requireAuth, requireSupervisor, isHrManager } = require('../middleware/auth');
 const { notifyUsers } = require('./notifications');
 
 const router = express.Router();
@@ -183,6 +183,9 @@ router.post('/:id/cancel', requireAuth, requireEmployee, async (req, res) => {
 
 // ---- Supervisor / admin side ----
 router.get('/review', requireAuth, requireSupervisor, async (req, res) => {
+  if (isHrManager(req)) {
+    return res.status(403).json({ error: 'صلاحية مدير الموارد البشرية مخصصة للحضور والغياب وطلبات الموظفين فقط.' });
+  }
   const scope = shiftScope(req);
   const status = String(req.query.status || 'pending');
   const params = [];
@@ -202,6 +205,10 @@ router.get('/review', requireAuth, requireSupervisor, async (req, res) => {
 });
 
 async function loadForReview(req, res) {
+  if (isHrManager(req)) {
+    res.status(403).json({ error: 'صلاحية مدير الموارد البشرية مخصصة للحضور والغياب وطلبات الموظفين فقط.' });
+    return null;
+  }
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) { res.status(400).json({ error: 'طلب غير صالح.' }); return null; }
   const r = await db.prepare('SELECT * FROM missing_data_requests WHERE id = ?').get(id);
@@ -295,6 +302,9 @@ router.post('/:id/reject', requireAuth, requireSupervisor, async (req, res) => {
 
 // Badge on the "الطلبات" nav item: open missing-data requests + open leave/advance requests.
 router.get('/pending-count', requireAuth, requireSupervisor, async (req, res) => {
+  if (isHrManager(req)) {
+    return res.json({ pending: 0, missing: 0, other: 0 });
+  }
   const scope = shiftScope(req);
   const count = async table => (scope
     ? (await db.query(`SELECT COUNT(*)::int AS c FROM ${table} WHERE status = 'pending' AND COALESCE(shift,'') = ANY($1::text[])`, [scope])).rows[0]

@@ -1,4 +1,3 @@
-const crypto = require('crypto');
 const express = require('express');
 const db = require('../database/init');
 const {
@@ -7,8 +6,13 @@ const {
   requireSupervisor,
   isCreator,
   isAdmin,
+  isHrManager,
+  isAdminOrHr,
   getSupervisorShifts,
   normalizeShiftsList,
+  getHrCompanies,
+  normalizeCompaniesList,
+  companyMatchesList,
 } = require('../middleware/auth');
 const { notifyUsers } = require('./notifications');
 const { getSystemConfig } = require('../utils/systemSettings');
@@ -110,9 +114,15 @@ const REQUEST_CATALOG = {
     requiredAttachments: [],
   },
   smart_business_request: {
-    category: 'employee_affairs',
+    category: 'smart_business_services',
     title: 'Smart Business Company Request',
     arabicTitle: 'تقديم طلب شركة سمارت بيزنس',
+    requiredAttachments: [],
+  },
+  medical_services: {
+    category: 'smart_business_services',
+    title: 'Medical Services',
+    arabicTitle: 'خدمات طبية',
     requiredAttachments: [],
   },
 };
@@ -140,6 +150,13 @@ const ALLOWED_FIELDS_BY_TYPE = {
   resignation: ['currentStage', 'whatsappNumber', 'lastWorkingDay', 'reason', 'suggestions'],
   resignation_withdrawal: ['residence', 'reasonForWithdrawal'],
   smart_business_request: ['smartRequestType', 'notes'],
+  medical_services: [
+    'labName',
+    'recipientType',
+    'familyRelation',
+    'labVisitDate',
+    'phone',
+  ],
 };
 
 function sanitizeFormData(requestType, rawFormData) {
@@ -313,8 +330,8 @@ async function getModuleConfig() {
   const saved = await getSetting('request_module_config', {});
   const allowSup = Boolean(saved.allowSupervisorDecision);
   const decisionRoles = allowSup
-    ? ['system_creator', 'admin', 'supervisor']
-    : ['system_creator', 'admin'];
+    ? ['system_creator', 'admin', 'hr_manager', 'supervisor']
+    : ['system_creator', 'admin', 'hr_manager'];
   const { startDay, endDay } = clampWindowDays(saved.advanceWindowStartDay, saved.advanceWindowEndDay);
   const supervisorAllowedTypes = Array.isArray(saved.supervisorAllowedTypes)
     ? [...new Set(saved.supervisorAllowedTypes.filter((t) => VALID_REQUEST_TYPES.includes(t)))]
@@ -508,7 +525,7 @@ function parseFormData(raw) {
 
 function userCanDecide(req, config) {
   if (!req.user) return false;
-  if (isAdmin(req) || isCreator(req)) return true;
+  if (isAdminOrHr(req)) return true;
   if (req.user.role === 'supervisor') {
     return Boolean(
       config.allowSupervisorDecision &&
@@ -519,8 +536,14 @@ function userCanDecide(req, config) {
   return false;
 }
 
+function hrCanAccessRequest(req, row) {
+  if (!isHrManager(req)) return true;
+  return companyMatchesList(row?.company, getHrCompanies(req));
+}
+
 function supervisorCanAccessRequest(req, row, config) {
-  if (isAdmin(req) || isCreator(req)) return true;
+  if (isHrManager(req)) return hrCanAccessRequest(req, row);
+  if (isAdminOrHr(req)) return true;
   if (req.user?.role !== 'supervisor') return false;
   if (!config.allowSupervisorDecision) return false;
   const reqType = row.request_type || row.kind || '';
@@ -540,9 +563,9 @@ function supervisorCanAccessRequest(req, row, config) {
   return supShifts.includes(empShift);
 }
 
-async function decisionMakerRecipientsForRequest(config, requestType, originShift, formData, excludeEmpId) {
+async function decisionMakerRecipientsForRequest(config, requestType, originShift, originCompany, formData, excludeEmpId) {
   const rows = await db
-    .prepare("SELECT id, role, shift, supervisor_shifts FROM employees WHERE role IN ('system_creator', 'admin', 'supervisor')")
+    .prepare("SELECT id, role, shift, supervisor_shifts, hr_companies, company FROM employees WHERE role IN ('system_creator', 'admin', 'hr_manager', 'supervisor')")
     .all();
 
   const targetSupShift =
@@ -559,6 +582,13 @@ async function decisionMakerRecipientsForRequest(config, requestType, originShif
     if (uid === Number(excludeEmpId)) continue;
     if (r.role === 'system_creator' || r.role === 'admin') {
       ids.push(uid);
+      continue;
+    }
+    if (r.role === 'hr_manager') {
+      const hrAllowed = normalizeCompaniesList(r.hr_companies, r.company);
+      if (companyMatchesList(originCompany, hrAllowed)) {
+        ids.push(uid);
+      }
       continue;
     }
     if (r.role === 'supervisor' && allowSupForThisType && targetSupShift) {
@@ -626,7 +656,8 @@ router.get('/meta', requireAuth, async (req, res) => {
   ]);
   const eligibility = await computeEligibility(empId, profile?.created_at || null, config, sysConfig);
 
-  const isDecisionOnlyAdmin = isAdmin(req) || isCreator(req);
+  const isDecisionOnlyAdmin = isAdminOrHr(req);
+  const canManageRequestSettings = isAdmin(req) || isCreator(req);
   const supCanAct =
     req.user?.role === 'supervisor' &&
     config.allowSupervisorDecision &&
@@ -653,10 +684,11 @@ router.get('/meta', requireAuth, async (req, res) => {
       canViewAdmin: isDecisionOnlyAdmin || supCanAct,
       canDecide: isDecisionOnlyAdmin || supCanAct,
       canExport: isDecisionOnlyAdmin || (supCanAct && allowSupExport),
-      canManageSettings: isDecisionOnlyAdmin,
+      canManageSettings: canManageRequestSettings,
       decisionRoles: config.decisionRoles,
       supervisorAllowedTypes: config.supervisorAllowedTypes,
       supervisorShifts: getSupervisorShifts(req) || [],
+      hrCompanies: getHrCompanies(req) || [],
       requireDecisionReason: config.requireDecisionReason,
       allowEmployeeCancellation: config.allowEmployeeCancellation,
       allowReopenDecision: config.allowReopenDecision,
@@ -671,9 +703,9 @@ router.get('/meta', requireAuth, async (req, res) => {
 
 // ---- Employee's Own Requests ----
 router.get('/mine', requireAuth, async (req, res) => {
-  if (isAdmin(req) || isCreator(req)) {
+  if (isAdminOrHr(req)) {
     return res.status(403).json({
-      error: 'حساب الإدارة مخصص لمراجعة واعتماد الطلبات ولا يمكنه عرض طلبات شخصية.',
+      error: 'حساب الإدارة أو مدير الموارد البشرية مخصص لمراجعة واعتماد الطلبات ولا يمكنه عرض طلبات شخصية.',
     });
   }
   const rows = await db
@@ -706,8 +738,7 @@ router.get('/mine', requireAuth, async (req, res) => {
 router.get('/admin', requireAuth, requireSupervisor, async (req, res) => {
   const config = await getModuleConfig();
   if (
-    !isAdmin(req) &&
-    !isCreator(req) &&
+    !isAdminOrHr(req) &&
     (!config.allowSupervisorDecision || !config.supervisorAllowedTypes.length)
   ) {
     return res
@@ -739,6 +770,9 @@ router.get('/admin', requireAuth, requireSupervisor, async (req, res) => {
 
   if (req.user?.role === 'supervisor') {
     rows = rows.filter((r) => supervisorCanAccessRequest(req, r, config));
+  } else if (isHrManager(req)) {
+    const hrCompanies = getHrCompanies(req);
+    rows = rows.filter((r) => companyMatchesList(r.company, hrCompanies));
   }
 
   const normalized = rows.map(formatRequestRow);
@@ -860,11 +894,11 @@ router.put('/settings', requireAuth, requireAdmin, async (req, res) => {
   res.json({ ok: true, config: nextCfg });
 });
 
-// ---- Submit New Request (All 12 Types) ----
+// ---- Submit New Request ----
 router.post('/', requireAuth, async (req, res) => {
-  if (isAdmin(req) || isCreator(req)) {
+  if (isAdminOrHr(req)) {
     return res.status(403).json({
-      error: 'حساب الإدارة مخصص لإدارة ومراجعة الطلبات فقط ولا يمكنه تقديم طلبات شخصية.',
+      error: 'حساب الإدارة أو مدير الموارد البشرية مخصص لإدارة ومراجعة الطلبات فقط ولا يمكنه تقديم طلبات شخصية.',
     });
   }
   const empId = Number(req.user.id);
@@ -904,7 +938,10 @@ router.post('/', requireAuth, async (req, res) => {
   const rawAttachments = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
 
   // Enforce Smart Business restriction strictly from IEMS company profile
-  if (requestType === 'smart_business_request' && !isSmartBusinessCompany(emp.company)) {
+  if (
+    (requestType === 'smart_business_request' || requestType === 'medical_services') &&
+    !isSmartBusinessCompany(emp.company)
+  ) {
     return res.status(403).json({
       error: 'هذا الطلب متاح لموظفي شركة Smart Business فقط وفقاً لبيانات ملفك الوظيفي في IEMS.',
     });
@@ -1120,13 +1157,45 @@ router.post('/', requireAuth, async (req, res) => {
     if (!String(formData.smartRequestType || '').trim()) {
       return res.status(400).json({ error: 'يرجى اختيار نوع طلب شركة سمارت بيزنس.' });
     }
+  } else if (requestType === 'medical_services') {
+    const labName = String(formData.labName || '').trim();
+    if (!['معمل فحوصات', 'معمل النيل مصر'].includes(labName)) {
+      return res.status(400).json({ error: 'يرجى اختيار المعمل المطلوب (معمل فحوصات أو معمل النيل مصر).' });
+    }
+    const recipientType = String(formData.recipientType || '').trim();
+    if (!['شخصي', 'أحد أفراد الأسرة'].includes(recipientType)) {
+      return res.status(400).json({ error: 'يرجى تحديد لمن يوجّه الخطاب (شخصي أو أحد أفراد الأسرة).' });
+    }
+    const familyRelation = String(formData.familyRelation || '').trim();
+    const VALID_RELATIONS = ['أب', 'أم', 'أخ', 'أخت', 'ابن', 'ابنة'];
+    if (recipientType === 'أحد أفراد الأسرة') {
+      if (!VALID_RELATIONS.includes(familyRelation)) {
+        return res.status(400).json({ error: 'يرجى تحديد صلة القرابة (أب، أم، أخ، أخت، ابن، أو ابنة).' });
+      }
+      formData.familyRelation = familyRelation;
+    } else {
+      delete formData.familyRelation;
+    }
+    const labVisitDate = validDate(formData.labVisitDate);
+    if (!labVisitDate) {
+      return res.status(400).json({ error: 'يرجى تحديد تاريخ التوجه للمعمل بشكل صحيح.' });
+    }
+    const phone = String(formData.phone || '').trim();
+    const digitsOnly = phone.replace(/[^\d]/g, '');
+    if (!phone || digitsOnly.length < 8 || digitsOnly.length > 15) {
+      return res.status(400).json({ error: 'يرجى إدخال رقم هاتف صحيح.' });
+    }
+    formData.labName = labName;
+    formData.recipientType = recipientType;
+    formData.labVisitDate = labVisitDate;
+    formData.phone = phone;
   }
 
   // Keep only fields belonging strictly to the submitted requestType
   const sanitizedFormData = sanitizeFormData(requestType, formData);
 
   const monthTag = new Date().toISOString().slice(0, 7).replace('-', '');
-  const tempNumber = `REQ-${monthTag}-${crypto.randomInt(100000, 1000000)}`;
+  const tempNumber = `REQ-${monthTag}-${Math.floor(100000 + Math.random() * 899999)}`;
 
   const created = await db
     .prepare(
@@ -1195,6 +1264,7 @@ router.post('/', requireAuth, async (req, res) => {
     config,
     requestType,
     emp.shift,
+    emp.company || formData.company || null,
     sanitizedFormData,
     empId
   );
@@ -1212,7 +1282,17 @@ router.post('/', requireAuth, async (req, res) => {
     link: '/requests.html',
   });
 
-  res.json({ ok: true, id: created.id, request_number: requestNumber });
+  res.json({
+    ok: true,
+    id: created.id,
+    request_number: requestNumber,
+    request_title: catalog.arabicTitle,
+    category: catalog.category,
+    status: 'submitted',
+    submitted_at: new Date().toISOString(),
+    company: emp.company || formData.company || null,
+    shift: emp.shift || formData.shift || null,
+  });
 });
 
 // ---- Admin Cleanup Endpoint for Legacy/Corrupted Request Data ----
@@ -1230,7 +1310,7 @@ router.get('/attachments/:attId', requireAuth, async (req, res) => {
   const att = await db
     .prepare(
       `SELECT a.id, a.request_id, a.field_key, a.file_name, a.content_type, a.file_size, a.data_url, a.uploaded_at,
-              r.employee_id, r.shift, r.request_number, r.request_type, r.form_data
+              r.employee_id, r.company, r.shift, r.request_number, r.request_type, r.form_data
          FROM request_attachments a
          JOIN employee_requests r ON r.id = a.request_id
         WHERE a.id = ?`
@@ -1242,10 +1322,11 @@ router.get('/attachments/:attId', requireAuth, async (req, res) => {
   const config = await getModuleConfig();
   const isOwner = Number(att.employee_id) === Number(req.user.id);
   const canReview =
-    isAdmin(req) || isCreator(req) || (req.user?.role === 'supervisor' && supervisorCanAccessRequest(req, att, config));
+    (isAdminOrHr(req) && hrCanAccessRequest(req, att)) ||
+    (req.user?.role === 'supervisor' && supervisorCanAccessRequest(req, att, config));
 
   if (!isOwner && !canReview) {
-    return res.status(403).json({ error: 'غير مصرح لك بعرض هذا المرفق أو أنه خارج نطاق شيفتك وصلاحياتك.' });
+    return res.status(403).json({ error: 'غير مصرح لك بعرض هذا المرفق أو أنه خارج نطاق شركتك وصلاحياتك.' });
   }
 
   if (!isOwner) {
@@ -1276,10 +1357,11 @@ router.get('/:id', requireAuth, async (req, res) => {
   const config = await getModuleConfig();
   const isOwner = Number(r.employee_id) === Number(req.user.id);
   const canReview =
-    isAdmin(req) || isCreator(req) || (req.user?.role === 'supervisor' && supervisorCanAccessRequest(req, r, config));
+    (isAdminOrHr(req) && hrCanAccessRequest(req, r)) ||
+    (req.user?.role === 'supervisor' && supervisorCanAccessRequest(req, r, config));
 
   if (!isOwner && !canReview) {
-    return res.status(403).json({ error: 'غير مصرح لك بعرض تفاصيل هذا الطلب أو أنه خارج نطاق شيفتك.' });
+    return res.status(403).json({ error: 'غير مصرح لك بعرض تفاصيل هذا الطلب أو أنه خارج نطاق شركتك وشيفتك.' });
   }
 
   if (!isOwner) {
@@ -1371,7 +1453,7 @@ router.post('/:id/status', requireAuth, async (req, res) => {
     return res.status(403).json({ error: 'لا يمكن لمتخذ القرار مراجعة طلبه الشخصي.' });
   }
   if (!supervisorCanAccessRequest(req, existing, config)) {
-    return res.status(403).json({ error: 'هذا الطلب خارج نطاق الشيفتات أو أنواع الطلبات المسندة إليك.' });
+    return res.status(403).json({ error: 'هذا الطلب خارج نطاق الشركات أو الشيفتات المسندة إليك.' });
   }
   const curStatus = existing.status === 'pending' ? 'submitted' : existing.status;
   if (curStatus !== 'submitted') {
@@ -1435,7 +1517,7 @@ router.post('/:id/decide', requireAuth, async (req, res) => {
   }
 
   if (!supervisorCanAccessRequest(req, existing, config)) {
-    return res.status(403).json({ error: 'هذا الطلب خارج نطاق الشيفتات أو أنواع الطلبات المسندة إليك.' });
+    return res.status(403).json({ error: 'هذا الطلب خارج نطاق الشركات أو الشيفتات المسندة إليك.' });
   }
 
   const curStatus = existing.status === 'pending' ? 'submitted' : existing.status;
@@ -1521,7 +1603,7 @@ router.post('/:id/reopen', requireAuth, async (req, res) => {
   const existing = await db.prepare('SELECT * FROM employee_requests WHERE id = ?').get(id);
   if (!existing) return res.status(404).json({ error: 'الطلب غير موجود.' });
   if (!supervisorCanAccessRequest(req, existing, config)) {
-    return res.status(403).json({ error: 'هذا الطلب خارج نطاق الشيفتات أو أنواع الطلبات المسندة إليك.' });
+    return res.status(403).json({ error: 'هذا الطلب خارج نطاق الشركات أو الشيفتات المسندة إليك.' });
   }
   if (!['approved', 'rejected'].includes(existing.status)) {
     return res.status(409).json({ error: 'يمكن إعادة فتح الطلبات التي صدر بشأنها قرار نهائي فقط.' });

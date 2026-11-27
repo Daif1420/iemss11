@@ -13,6 +13,7 @@ export const DEPARTURE_REASONS = [
 export const ROLE_LABELS: Record<Role, string> = {
   system_creator: 'منشئ النظام',
   admin: 'مدير النظام',
+  hr_manager: 'مدير الموارد البشرية',
   supervisor: 'مشرف',
   employee: 'موظف',
 };

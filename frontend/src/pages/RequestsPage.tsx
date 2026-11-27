@@ -24,6 +24,7 @@ import {
   LayoutGrid,
   Plus,
   Search,
+  Stethoscope,
   Undo2,
   UserMinus,
   Wallet,
@@ -43,7 +44,10 @@ import type {
 import { AppShell } from '@/components/layout/AppShell';
 import { KpiCard } from '@/components/shared/KpiCard';
 import { RequestDetailDialog } from '@/components/requests/RequestDetailDialog';
-import { RequestFormDialog } from '@/components/requests/RequestFormDialog';
+import {
+  RequestFormDialog,
+  type SubmittedRequestSummary,
+} from '@/components/requests/RequestFormDialog';
 import {
   REQUEST_CATALOG,
   REQUEST_CATALOG_MAP,
@@ -53,6 +57,14 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { DatePicker } from '@/components/ui/date-picker';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { NativeSelect } from '@/components/ui/select';
@@ -105,18 +117,20 @@ function iconForRequestType(type: RequestTypeKey) {
       return Undo2;
     case 'smart_business_request':
       return Building2;
+    case 'medical_services':
+      return Stethoscope;
     default:
       return ClipboardList;
   }
 }
 
 export function RequestsPage() {
-  const { user, isEmployee, isAdminUp } = useAuth();
+  const { user, isEmployee, isHrManager, isAdminOrHr } = useAuth();
 
   const [meta, setMeta] = useState<RequestMetaPayload | null>(null);
   const [metaLoading, setMetaLoading] = useState(true);
 
-  const [activeTab, setActiveTab] = useState<TabKey>(isAdminUp ? 'admin' : 'catalog');
+  const [activeTab, setActiveTab] = useState<TabKey>(isAdminOrHr ? 'admin' : 'catalog');
   const initialTabResolvedRef = useRef(false);
   const [selectedCategory, setSelectedCategory] = useState<'all' | RequestCategoryKey>('all');
   const [catalogSearch, setCatalogSearch] = useState('');
@@ -124,6 +138,7 @@ export function RequestsPage() {
   // Dialog states
   const [openFormType, setOpenFormType] = useState<RequestTypeKey | null>(null);
   const [detailRequestId, setDetailRequestId] = useState<number | null>(null);
+  const [confirmation, setConfirmation] = useState<SubmittedRequestSummary | null>(null);
 
   // Employee My Requests
   const [myRequests, setMyRequests] = useState<RequestItem[]>([]);
@@ -143,8 +158,8 @@ export function RequestsPage() {
   const [filterFrom, setFilterFrom] = useState('');
   const [filterTo, setFilterTo] = useState('');
 
-  const canSubmit = meta ? meta.permissions.canSubmit : !isAdminUp;
-  const canViewAdmin = meta ? meta.permissions.canViewAdmin : isAdminUp;
+  const canSubmit = meta ? meta.permissions.canSubmit : !isAdminOrHr;
+  const canViewAdmin = meta ? meta.permissions.canViewAdmin : isAdminOrHr;
   const canExportQueue = canViewAdmin && (meta?.permissions.canExport ?? true);
 
   const loadMeta = useCallback(async () => {
@@ -252,7 +267,13 @@ export function RequestsPage() {
 
   const availableCatalog = useMemo(() => {
     return REQUEST_CATALOG.filter((entry) => {
-      if (entry.key === 'smart_business_request' && isEmployee && !isSmartUser) return false;
+      if (
+        (entry.key === 'smart_business_request' || entry.key === 'medical_services') &&
+        isEmployee &&
+        !isSmartUser
+      ) {
+        return false;
+      }
       return true;
     });
   }, [isEmployee, isSmartUser]);
@@ -494,7 +515,7 @@ export function RequestsPage() {
                       className="h-9 text-xs"
                     >
                       <option value="">كل الأنواع</option>
-                      {(isAdminUp || !meta?.permissions.supervisorAllowedTypes?.length
+                      {(isAdminOrHr || !meta?.permissions.supervisorAllowedTypes?.length
                         ? REQUEST_CATALOG
                         : REQUEST_CATALOG.filter((c) =>
                             meta.permissions.supervisorAllowedTypes!.includes(c.key)
@@ -525,15 +546,50 @@ export function RequestsPage() {
 
                   <div className="space-y-1">
                     <Label className="text-[11px] font-semibold text-muted-foreground">الشركة</Label>
-                    <NativeSelect
-                      value={filterCompany}
-                      onChange={(e) => setFilterCompany(e.target.value)}
-                      className="h-9 text-xs"
-                    >
-                      <option value="">كل الشركات</option>
-                      <option value="SMART">Smart Business</option>
-                      <option value="BRAVOS">Bravos</option>
-                    </NativeSelect>
+                    {(() => {
+                      const hrCompanies =
+                        meta?.permissions.hrCompanies ||
+                        user?.hrCompanies ||
+                        user?.hr_companies ||
+                        [];
+                      if (isHrManager && hrCompanies.length === 1) {
+                        return (
+                          <Input
+                            value={hrCompanies[0]}
+                            readOnly
+                            disabled
+                            className="h-9 text-xs bg-muted/50 font-bold"
+                          />
+                        );
+                      }
+                      if (isHrManager && hrCompanies.length > 1) {
+                        return (
+                          <NativeSelect
+                            value={filterCompany}
+                            onChange={(e) => setFilterCompany(e.target.value)}
+                            className="h-9 text-xs"
+                          >
+                            <option value="">كل الشركات المسندة</option>
+                            {hrCompanies.map((c) => (
+                              <option key={c} value={c}>
+                                {c}
+                              </option>
+                            ))}
+                          </NativeSelect>
+                        );
+                      }
+                      return (
+                        <NativeSelect
+                          value={filterCompany}
+                          onChange={(e) => setFilterCompany(e.target.value)}
+                          className="h-9 text-xs"
+                        >
+                          <option value="">كل الشركات</option>
+                          <option value="SMART">Smart Business</option>
+                          <option value="BRAVOS">Bravos</option>
+                        </NativeSelect>
+                      );
+                    })()}
                   </div>
 
                   <div className="space-y-1">
@@ -542,7 +598,7 @@ export function RequestsPage() {
                       const supShifts =
                         meta?.permissions.supervisorShifts ||
                         (user?.shift ? [String(user.shift).trim().toUpperCase()] : []);
-                      if (!isAdminUp && supShifts.length === 1) {
+                      if (!isAdminOrHr && supShifts.length === 1) {
                         return (
                           <Input
                             value={`Shift ${supShifts[0]}`}
@@ -552,14 +608,14 @@ export function RequestsPage() {
                           />
                         );
                       }
-                      const shiftList = isAdminUp ? ['A', 'B', 'C', 'D'] : supShifts;
+                      const shiftList = isAdminOrHr ? ['A', 'B', 'C', 'D'] : supShifts;
                       return (
                         <NativeSelect
                           value={filterShift}
                           onChange={(e) => setFilterShift(e.target.value)}
                           className="h-9 text-xs"
                         >
-                          <option value="">{isAdminUp ? 'كل الشيفتات' : 'كل الشيفتات المسندة'}</option>
+                          <option value="">{isAdminOrHr ? 'كل الشيفتات' : 'كل الشيفتات المسندة'}</option>
                           {shiftList.map((s) => (
                             <option key={s} value={s}>
                               Shift {s}
@@ -737,7 +793,7 @@ export function RequestsPage() {
                     <span>جميع الخدمات</span>
                     <span className="tabular-nums opacity-80">{categoryCounts.all}</span>
                   </button>
-                  {REQUEST_CATEGORIES.map((cat) => (
+                  {REQUEST_CATEGORIES.filter((cat) => (categoryCounts[cat.key] || 0) > 0).map((cat) => (
                     <button
                       key={cat.key}
                       type="button"
@@ -1027,13 +1083,128 @@ export function RequestsPage() {
           requestType={openFormType}
           meta={meta}
           onClose={() => setOpenFormType(null)}
-          onSubmitted={() => {
+          onSubmitted={(summary) => {
             setOpenFormType(null);
-            setActiveTab('mine');
+            setConfirmation(summary);
             handleRefreshAfterChange();
           }}
         />
       )}
+
+      {/* Polished RTL Confirmation Modal After Request Submission */}
+      <Dialog open={Boolean(confirmation)} onOpenChange={(o: boolean) => !o && setConfirmation(null)}>
+        <DialogContent dir="rtl" className="sm:max-w-md overflow-hidden p-0">
+          {confirmation && (
+            <>
+              <div className="bg-emerald-500/8 dark:bg-emerald-500/12 border-b border-emerald-500/20 px-6 pt-7 pb-5 text-center space-y-3">
+                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-emerald-500/30 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                  <CheckCircle2 className="h-8 w-8" />
+                </div>
+                <div className="space-y-1">
+                  <DialogHeader className="text-center space-y-1">
+                    <DialogTitle className="text-lg font-extrabold text-foreground text-center">
+                      تم إرسال طلبك بنجاح
+                    </DialogTitle>
+                    <DialogDescription className="text-xs text-muted-foreground text-center leading-relaxed">
+                      تم تسجيل الطلب في النظام وإشعار الجهة المختصة للمراجعة والاعتماد.
+                    </DialogDescription>
+                  </DialogHeader>
+                </div>
+                <div className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-card px-3 py-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-300">
+                  <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                  <span>تم الإرسال · بانتظار المراجعة</span>
+                </div>
+              </div>
+
+              <div className="px-6 py-4 space-y-4">
+                <div className="rounded-xl border border-border bg-secondary/25 divide-y divide-border/70 text-xs">
+                  <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+                    <span className="text-muted-foreground font-medium">رقم الطلب</span>
+                    <span
+                      dir="ltr"
+                      className="font-extrabold text-primary tabular-nums tracking-wide"
+                    >
+                      {confirmation.requestNumber}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+                    <span className="text-muted-foreground font-medium">نوع الطلب</span>
+                    <span className="font-bold text-foreground text-end">
+                      {confirmation.requestTitle}
+                    </span>
+                  </div>
+                  {confirmation.employeeName && (
+                    <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+                      <span className="text-muted-foreground font-medium">مقدم الطلب</span>
+                      <span className="font-bold text-foreground tabular-nums">
+                        {confirmation.employeeName}
+                        {confirmation.employeeId ? ` (#${confirmation.employeeId})` : ''}
+                      </span>
+                    </div>
+                  )}
+                  {(confirmation.company || confirmation.shift) && (
+                    <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+                      <span className="text-muted-foreground font-medium">الشركة والشيفت</span>
+                      <span className="font-semibold text-foreground">
+                        {[
+                          confirmation.company || '—',
+                          confirmation.shift ? `Shift ${confirmation.shift}` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+                    <span className="text-muted-foreground font-medium">تاريخ التقديم</span>
+                    <span className="font-semibold text-foreground tabular-nums">
+                      {fmtDateTime(confirmation.submittedAt)}
+                    </span>
+                  </div>
+                </div>
+
+                <DialogFooter className="flex-col-reverse sm:flex-row sm:justify-between gap-2 pt-1">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setConfirmation(null)}
+                    className="w-full sm:w-auto"
+                  >
+                    إغلاق
+                  </Button>
+                  <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => {
+                        const reqId = confirmation.id;
+                        setConfirmation(null);
+                        setActiveTab('mine');
+                        setDetailRequestId(reqId);
+                      }}
+                      className="w-full sm:w-auto font-bold"
+                    >
+                      <Eye className="h-3.5 w-3.5 text-primary" />
+                      <span>عرض تفاصيل الطلب</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      onClick={() => {
+                        setConfirmation(null);
+                        setActiveTab('mine');
+                      }}
+                      className="w-full sm:w-auto font-bold"
+                    >
+                      <Inbox className="h-3.5 w-3.5" />
+                      <span>متابعة في طلباتي</span>
+                    </Button>
+                  </div>
+                </DialogFooter>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Request Detail & Decision Modal */}
       <RequestDetailDialog

@@ -57,7 +57,7 @@ function fmtEnNum(val?: number | null) {
 }
 
 export function ReportsPage() {
-  const { user, isAdminUp, publicConfig: authPublicConfig } = useAuth();
+  const { user, isAdminOrHr, publicConfig: authPublicConfig } = useAuth();
   const navigate = useNavigate();
 
   const [stages, setStages] = useState<string[]>([]);
@@ -91,7 +91,7 @@ export function ReportsPage() {
     [activePublicConfig]
   );
 
-  const canExport = isAdminUp || (activePublicConfig?.displayAndFeatures?.allowSupervisorExport ?? true);
+  const canExport = isAdminOrHr || (activePublicConfig?.displayAndFeatures?.allowSupervisorExport ?? true);
   const previewTextAlign =
     reportCfg.tableAlignH === 'left'
       ? 'text-left'
@@ -159,12 +159,12 @@ export function ReportsPage() {
 
       try {
         const repQ = new URLSearchParams({ from: f, to: t, stage: stg });
-        if (isAdminUp) {
+        if (isAdminOrHr) {
           shfts.forEach((s) => repQ.append('shift', s));
         }
 
         const dashQ = new URLSearchParams({ from: f, to: t, stage: stg });
-        if (isAdminUp) {
+        if (isAdminOrHr) {
           shfts.forEach((s) => dashQ.append('shift', s));
         }
 
@@ -192,7 +192,7 @@ export function ReportsPage() {
         setTop5Loading(false);
       }
     },
-    [isAdminUp]
+    [isAdminOrHr]
   );
 
   useEffect(() => {
@@ -216,7 +216,7 @@ export function ReportsPage() {
         const defaultStage = cleanStages[0] || '';
         setSelectedStage(defaultStage);
 
-        if (isAdminUp) {
+        if (isAdminOrHr) {
           setShifts(shiftRes.shifts || []);
         } else {
           const supShifts = user?.supervisorShifts?.length
@@ -247,7 +247,7 @@ export function ReportsPage() {
     return () => {
       active = false;
     };
-  }, [isAdminUp, user?.shift, user?.supervisorShifts, executeReportAndTop5]);
+  }, [isAdminOrHr, user?.shift, user?.supervisorShifts, executeReportAndTop5]);
 
   const applyQuickRange = (kind: Exclude<QuickPeriodKey, 'custom'>) => {
     const anchor = maxDate || to || new Date().toISOString().slice(0, 10);
@@ -455,7 +455,7 @@ export function ReportsPage() {
                 />
               </div>
 
-              {isAdminUp && (
+              {isAdminOrHr && (
                 <div className="lg:col-span-2 space-y-1.5">
                   <Label className="text-xs">الشيفت</Label>
                   <MultiFilterPopover
@@ -469,7 +469,7 @@ export function ReportsPage() {
                 </div>
               )}
 
-              <div className={cn(isAdminUp ? 'lg:col-span-4' : 'lg:col-span-6', 'space-y-1.5')}>
+              <div className={cn(isAdminOrHr ? 'lg:col-span-4' : 'lg:col-span-6', 'space-y-1.5')}>
                 <Label htmlFor="rep-stage" className="text-xs">
                   المرحلة المطلوبة (مرحلة واحدة فقط)
                 </Label>

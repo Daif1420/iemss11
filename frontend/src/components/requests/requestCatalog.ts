@@ -55,6 +55,13 @@ export const REQUEST_ALLOWED_FIELDS: Record<RequestTypeKey, string[]> = {
   resignation: ['currentStage', 'whatsappNumber', 'lastWorkingDay', 'reason', 'suggestions'],
   resignation_withdrawal: ['residence', 'reasonForWithdrawal'],
   smart_business_request: ['smartRequestType', 'notes'],
+  medical_services: [
+    'labName',
+    'recipientType',
+    'familyRelation',
+    'labVisitDate',
+    'phone',
+  ],
 };
 
 export const REQUEST_CATEGORIES: {
@@ -75,7 +82,12 @@ export const REQUEST_CATEGORIES: {
   {
     key: 'employee_affairs',
     title: 'شؤون الموظفين',
-    subtitle: 'الطلبات العامة، نقل الشيفت، الاستقالات، وخدمات Smart Business.',
+    subtitle: 'الطلبات العامة، نقل الشيفت، نماذج الاستقالة، والتراجع عن الاستقالة.',
+  },
+  {
+    key: 'smart_business_services',
+    title: 'خدمات Smart Business',
+    subtitle: 'الطلبات الإدارية والخدمات الطبية المخصصة لموظفي شركة Smart Business.',
   },
 ];
 
@@ -216,12 +228,24 @@ export const REQUEST_CATALOG: RequestCatalogEntry[] = [
   },
   {
     key: 'smart_business_request',
-    category: 'employee_affairs',
+    category: 'smart_business_services',
     title: 'خدمات سمارت بيزنس',
     arabicTitle: 'تقديم طلب شركة سمارت بيزنس',
     description: 'طلب مفردات مرتب، كارنيه عمل، شهادة خبرة، أو استرداد مسوغات التعيين.',
     conditions: [
       'متاح لموظفي شركة Smart Business المسجلين في النظام فقط.',
+    ],
+  },
+  {
+    key: 'medical_services',
+    category: 'smart_business_services',
+    title: 'خدمات طبية',
+    arabicTitle: 'خدمات طبية',
+    description:
+      'يرجى ملء هذه الاستمارة بالبيانات الصحيحة، وذلك لإصدار خطاب رسمي موجه إلى معمل التحاليل للاستفادة من الخصم الطبي المخصص لموظفي Smart Business.',
+    conditions: [
+      'متاح لموظفي شركة Smart Business المسجلين في النظام فقط.',
+      'برجاء التأكد من صحة جميع البيانات قبل إرسال الاستمارة لإصدار الخطاب الرسمي بدقة.',
     ],
   },
 ];
@@ -318,6 +342,10 @@ export const FORM_FIELD_LABELS: Record<string, string> = {
   residence: 'منطقة السكن',
   reasonForWithdrawal: 'سبب التراجع عن الاستقالة',
   smartRequestType: 'نوع طلب سمارت بيزنس',
+  labName: 'المعمل المطلوب',
+  recipientType: 'الخطاب موجّه لمن؟',
+  familyRelation: 'صلة القرابة',
+  labVisitDate: 'تاريخ التوجه للمعمل',
   notes: 'ملاحظات',
 };
 

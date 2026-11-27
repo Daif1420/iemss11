@@ -2,7 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('../database/init');
-const { requireAuth, JWT_SECRET } = require('../middleware/auth');
+const { requireAuth, normalizeCompaniesList, JWT_SECRET } = require('../middleware/auth');
 const { getSystemConfig } = require('../utils/systemSettings');
 
 const router = express.Router();
@@ -76,8 +76,19 @@ router.post('/login', async (req, res) => {
     return res.status(401).json({ error: 'الرقم التعريفي أو كلمة المرور غير صحيحة' });
   }
 
+  const hrCompanies = emp.role === 'hr_manager'
+    ? normalizeCompaniesList(emp.hr_companies, emp.company)
+    : (Array.isArray(emp.hr_companies) ? emp.hr_companies : []);
+
   const token = jwt.sign(
-    { id: emp.id, role: emp.role, name: emp.name, shift: emp.shift, supervisorShifts: emp.supervisor_shifts || [] },
+    {
+      id: emp.id,
+      role: emp.role,
+      name: emp.name,
+      shift: emp.shift,
+      supervisorShifts: emp.supervisor_shifts || [],
+      hrCompanies,
+    },
     JWT_SECRET,
     { expiresIn: `${sessionHours}h` }
   );
@@ -90,6 +101,8 @@ router.post('/login', async (req, res) => {
       role: emp.role,
       shift: emp.shift,
       supervisorShifts: emp.supervisor_shifts || [],
+      hrCompanies,
+      hr_companies: hrCompanies,
       company: emp.company,
       department: emp.department,
       must_change_password: !!emp.must_change_password,
@@ -155,9 +168,12 @@ router.get('/forgot-password-options', async (_req, res) => {
 });
 
 router.get('/me', requireAuth, async (req, res) => {
-  const emp = await db.prepare('SELECT id, name, role, shift, supervisor_shifts, company, department, must_change_password FROM employees WHERE id = ?')
+  const emp = await db.prepare('SELECT id, name, role, shift, supervisor_shifts, hr_companies, company, department, must_change_password FROM employees WHERE id = ?')
     .get(req.user.id);
   if (!emp) return res.status(404).json({ error: 'غير موجود' });
+  const hrCompanies = emp.role === 'hr_manager'
+    ? normalizeCompaniesList(emp.hr_companies, emp.company)
+    : (Array.isArray(emp.hr_companies) ? emp.hr_companies : []);
   res.json({
     user: {
       id: emp.id,
@@ -166,6 +182,8 @@ router.get('/me', requireAuth, async (req, res) => {
       shift: emp.shift,
       supervisorShifts: emp.supervisor_shifts || [],
       supervisor_shifts: emp.supervisor_shifts || [],
+      hrCompanies,
+      hr_companies: hrCompanies,
       company: emp.company,
       department: emp.department,
       must_change_password: !!emp.must_change_password,

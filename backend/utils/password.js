@@ -1,5 +1,3 @@
-const crypto = require('crypto');
-
 // Generates strong random passwords (upper + lower + digit + symbol) for
 // admin-issued credentials. Employees are forced to change these on first login.
 const LOWER = 'abcdefghjkmnpqrstuvwxyz';
@@ -8,7 +6,7 @@ const DIGIT = '23456789';
 const SYMBOL = '!@#$%*?-';
 const ALL = LOWER + UPPER + DIGIT + SYMBOL;
 
-function pick(chars) { return chars[crypto.randomInt(chars.length)]; }
+function pick(chars) { return chars[Math.floor(Math.random() * chars.length)]; }
 
 function generateComplexPassword(length = 10) {
   const required = [pick(LOWER), pick(UPPER), pick(DIGIT), pick(SYMBOL)];
@@ -16,7 +14,7 @@ function generateComplexPassword(length = 10) {
   const chars = [...required, ...rest];
   // shuffle (Fisher-Yates)
   for (let i = chars.length - 1; i > 0; i--) {
-    const j = crypto.randomInt(i + 1);
+    const j = Math.floor(Math.random() * (i + 1));
     [chars[i], chars[j]] = [chars[j], chars[i]];
   }
   return chars.join('');

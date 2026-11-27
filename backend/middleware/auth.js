@@ -1,9 +1,7 @@
 const jwt = require('jsonwebtoken');
 const db = require('../database/init');
 
-// No fallback in production: a missing secret must fail loudly, never fall back to a known value.
-const JWT_SECRET = process.env.JWT_SECRET
-  || (process.env.NODE_ENV === 'production' ? '' : 'iems-local-dev-secret-not-for-production');
+const JWT_SECRET = process.env.JWT_SECRET || 'iems-local-dev-secret-change-in-production';
 
 function normalizeShiftsList(rawShifts, fallbackShift) {
   const arr = Array.isArray(rawShifts) && rawShifts.length
@@ -15,6 +13,45 @@ function normalizeShiftsList(rawShifts, fallbackShift) {
 function getSupervisorShifts(req) {
   if (req.user?.role !== 'supervisor') return null;
   return normalizeShiftsList(req.user.supervisorShifts || req.user.supervisor_shifts, req.user.shift);
+}
+
+function normalizeCompanyToken(value) {
+  const u = String(value || '').trim().toUpperCase();
+  if (!u) return '';
+  if (u.includes('SMART') || u === 'SB') return 'SMART BUSINESS';
+  if (u.includes('BRAVOS')) return 'BRAVOS';
+  return u;
+}
+
+function normalizeCompaniesList(rawCompanies, fallbackCompany) {
+  const arr = Array.isArray(rawCompanies) && rawCompanies.length
+    ? rawCompanies
+    : (fallbackCompany ? [fallbackCompany] : []);
+  return [...new Set(arr.map(normalizeCompanyToken).filter(Boolean))];
+}
+
+function getHrCompanies(req) {
+  if (req.user?.role !== 'hr_manager') return null;
+  return normalizeCompaniesList(req.user.hrCompanies || req.user.hr_companies, req.user.company);
+}
+
+function companyMatchesList(empCompany, allowedCompanies) {
+  if (!allowedCompanies || !allowedCompanies.length) return false;
+  const token = normalizeCompanyToken(empCompany);
+  if (!token) return false;
+  return allowedCompanies.map(normalizeCompanyToken).includes(token);
+}
+
+function companyCanonSql(col = 'e.company') {
+  return `(CASE WHEN UPPER(TRIM(COALESCE(${col},''))) LIKE '%SMART%' OR UPPER(TRIM(COALESCE(${col},'')))='SB' THEN 'SMART BUSINESS' WHEN UPPER(TRIM(COALESCE(${col},''))) LIKE '%BRAVOS%' THEN 'BRAVOS' ELSE UPPER(TRIM(COALESCE(${col},''))) END)`;
+}
+
+function addHrCompanySql(sql, params, col, hrCompanies) {
+  if (!hrCompanies) return sql;
+  if (!hrCompanies.length) return `${sql} AND 1=0`;
+  sql += ` AND ${companyCanonSql(col)} = ANY(?::text[])`;
+  params.push(hrCompanies);
+  return sql;
 }
 
 function requireJwtSecret(res) {
@@ -36,12 +73,15 @@ async function requireAuth(req, res, next) {
   }
   try {
     const fresh = await db
-      .prepare('SELECT id, name, role, shift, supervisor_shifts, company, department FROM employees WHERE id = ?')
+      .prepare('SELECT id, name, role, shift, supervisor_shifts, hr_companies, company, department FROM employees WHERE id = ?')
       .get(Number(decoded.id));
     if (!fresh) {
       return res.status(401).json({ error: 'الحساب غير موجود، سجل الدخول مرة أخرى' });
     }
     const supShifts = normalizeShiftsList(fresh.supervisor_shifts, fresh.shift);
+    const hrCompanies = fresh.role === 'hr_manager'
+      ? normalizeCompaniesList(fresh.hr_companies, fresh.company)
+      : (Array.isArray(fresh.hr_companies) ? fresh.hr_companies.map(normalizeCompanyToken).filter(Boolean) : []);
     req.user = {
       ...decoded,
       id: fresh.id,
@@ -50,6 +90,8 @@ async function requireAuth(req, res, next) {
       shift: fresh.shift,
       supervisorShifts: supShifts,
       supervisor_shifts: supShifts,
+      hrCompanies,
+      hr_companies: hrCompanies,
       company: fresh.company,
       department: fresh.department,
     };
@@ -60,8 +102,10 @@ async function requireAuth(req, res, next) {
 }
 
 const isCreator = req => req.user?.role === 'system_creator';
+const isHrManager = req => req.user?.role === 'hr_manager';
 const isAdmin = req => req.user?.role === 'admin' || isCreator(req);
-const isSupervisor = req => isAdmin(req) || req.user?.role === 'supervisor';
+const isAdminOrHr = req => isAdmin(req) || isHrManager(req);
+const isSupervisor = req => isAdminOrHr(req) || req.user?.role === 'supervisor';
 
 function requireSystemCreator(req, res, next) {
   if (!requireJwtSecret(res)) return;
@@ -75,17 +119,32 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+function requireAdminOrHr(req, res, next) {
+  if (!requireJwtSecret(res)) return;
+  if (!isAdminOrHr(req)) return res.status(403).json({ error: 'هذا الإجراء متاح لإدارة الموارد البشرية أو مدير النظام فقط.' });
+  next();
+}
+
 function requireSupervisor(req, res, next) {
   if (!requireJwtSecret(res)) return;
-  if (!isSupervisor(req)) return res.status(403).json({ error: 'هذا الإجراء متاح لمدير النظام أو المشرف فقط.' });
+  if (!isSupervisor(req)) return res.status(403).json({ error: 'هذا الإجراء متاح لمدير النظام أو الموارد البشرية أو المشرف فقط.' });
   next();
 }
 
 function requireAdminOrSupervisor(req, res, next) { return requireSupervisor(req, res, next); }
-const requireUploader = requireSupervisor;
+
+function requireUploader(req, res, next) {
+  if (!requireJwtSecret(res)) return;
+  if (!isAdmin(req) && req.user?.role !== 'supervisor') {
+    return res.status(403).json({ error: 'رفع وتحديث الشيتات متاح للإدارة والمشرفين فقط.' });
+  }
+  next();
+}
 
 module.exports = {
-  requireAuth, requireAdmin, requireSupervisor, requireAdminOrSupervisor,
-  requireUploader, requireSystemCreator, isCreator, isAdmin, isSupervisor,
-  getSupervisorShifts, normalizeShiftsList, JWT_SECRET
+  requireAuth, requireAdmin, requireAdminOrHr, requireSupervisor, requireAdminOrSupervisor,
+  requireUploader, requireSystemCreator, isCreator, isHrManager, isAdmin, isAdminOrHr, isSupervisor,
+  getSupervisorShifts, normalizeShiftsList,
+  normalizeCompanyToken, normalizeCompaniesList, getHrCompanies, companyMatchesList, companyCanonSql, addHrCompanySql,
+  JWT_SECRET
 };

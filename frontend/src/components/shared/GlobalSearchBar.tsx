@@ -16,6 +16,7 @@ import type { EmployeeRecord } from '@/types/iems';
 interface GlobalSearchBarProps {
   isAdminUp: boolean;
   isCreator: boolean;
+  isHrManager?: boolean;
   companies: string[];
   departments: string[];
   fallbackEmployees?: { id: number; name: string; company?: string | null; shift?: string | null; department?: string | null }[];
@@ -57,6 +58,7 @@ type SearchResultItem =
 export function GlobalSearchBar({
   isAdminUp,
   isCreator,
+  isHrManager = false,
   companies,
   departments,
   fallbackEmployees = [],
@@ -131,9 +133,14 @@ export function GlobalSearchBar({
       { title: 'كل الموظفين', subtitle: 'الدليل الكامل لجميع حسابات النظام', to: '/admin-employees.html', keywords: 'الكل جميع الموظفين directory' },
       { title: 'الموظفون الجدد', subtitle: 'قائمة التعيينات والانضمامات الحديثة', to: '/employees-new.html', keywords: 'جدد جديد تعيينات new' },
       { title: 'الموظفون المغادرون', subtitle: 'سجل المغادرة وأسباب الترك', to: '/employees-left.html', keywords: 'مغادرون استقالة ترك left' },
-      { title: 'التقارير وتحليل الأداء', subtitle: 'تقارير المراحل و Top 5 وتصدير PDF / Excel', to: '/reports.html', keywords: 'تقارير تارجت اداء top 5 reports' },
-      { title: 'تحديث البيانات (Excel)', subtitle: 'استيراد شيت الماستر وتحديث السجلات', to: '/admin-import.html', keywords: 'استيراد تحديث اكسل شيت import' },
+      { title: 'طلبات الموظفين', subtitle: 'مراجعة واعتماد طلبات الإجازات والخدمات', to: '/requests.html', keywords: 'طلبات اجازات سلف requests' },
     ];
+    if (!isHrManager) {
+      base.push(
+        { title: 'التقارير وتحليل الأداء', subtitle: 'تقارير المراحل و Top 5 وتصدير PDF / Excel', to: '/reports.html', keywords: 'تقارير تارجت اداء top 5 reports' },
+        { title: 'تحديث البيانات (Excel)', subtitle: 'استيراد شيت الماستر وتحديث السجلات', to: '/admin-import.html', keywords: 'استيراد تحديث اكسل شيت import' }
+      );
+    }
     if (isAdminUp) {
       base.push({
         title: 'الإدخال اليدوي',
@@ -165,7 +172,7 @@ export function GlobalSearchBar({
       );
     }
     return base;
-  }, [isAdminUp, isCreator]);
+  }, [isAdminUp, isCreator, isHrManager]);
 
   const results = useMemo<SearchResultItem[]>(() => {
     const q = query.trim().toLowerCase();

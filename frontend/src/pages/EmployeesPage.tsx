@@ -85,10 +85,18 @@ const SECTION_TABS: { mode: EmployeesPageMode; to: string; label: string; icon: 
 
 const SHIFT_CHOICES = ['A', 'B', 'C', 'D', 'OTHER'] as const;
 
+function normalizeCompanyToken(value?: string | null): string {
+  const u = String(value || '').trim().toUpperCase();
+  if (!u) return '';
+  if (u.includes('SMART') || u === 'SB') return 'SMART BUSINESS';
+  if (u.includes('BRAVOS')) return 'BRAVOS';
+  return u;
+}
+
 type SortKey = 'name' | 'id' | 'company' | 'shift' | 'left_date' | 'created_at';
 
 export function EmployeesPage({ mode }: { mode: EmployeesPageMode }) {
-  const { user, isCreator, isAdminUp } = useAuth();
+  const { user, isCreator, isAdminUp, isAdminOrHr, isHrManager } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [rows, setRows] = useState<EmployeeRecord[]>([]);
@@ -137,10 +145,27 @@ export function EmployeesPage({ mode }: { mode: EmployeesPageMode }) {
   const [supShifts, setSupShifts] = useState<string[]>([]);
   const [supSaving, setSupSaving] = useState(false);
 
+  const [hrRoleEmp, setHrRoleEmp] = useState<EmployeeRecord | null>(null);
+  const [hrCompaniesInput, setHrCompaniesInput] = useState<string[]>([]);
+  const [hrSaving, setHrSaving] = useState(false);
+
   const [departureEmp, setDepartureEmp] = useState<EmployeeRecord | null>(null);
   const [departureDate, setDepartureDate] = useState('');
   const [departureReason, setDepartureReason] = useState('');
   const [departureSaving, setDepartureSaving] = useState(false);
+
+  const [addOpen, setAddOpen] = useState(false);
+  const [addSaving, setAddSaving] = useState(false);
+  const [addForm, setAddForm] = useState({
+    id: '',
+    emp_num: '',
+    name: '',
+    company: '',
+    shift: 'A',
+    department: '',
+    education: '',
+    residence: '',
+  });
 
   const [confirmAction, setConfirmAction] = useState<{
     type: 'delete' | 'reset-default' | 'reactivate';
@@ -151,6 +176,12 @@ export function EmployeesPage({ mode }: { mode: EmployeesPageMode }) {
   const [configuredDepartureReasons, setConfiguredDepartureReasons] = useState<string[]>([
     ...DEPARTURE_REASONS,
   ]);
+  const [configuredCompanies, setConfiguredCompanies] = useState<string[]>([
+    'SMART BUSINESS',
+    'BRAVOS',
+  ]);
+  const [configuredShifts, setConfiguredShifts] = useState<string[]>(['A', 'B', 'C', 'D', 'Other']);
+  const [configuredDepartments, setConfiguredDepartments] = useState<string[]>([]);
 
   useEffect(() => {
     let active = true;
@@ -161,9 +192,23 @@ export function EmployeesPage({ mode }: { mode: EmployeesPageMode }) {
         if (Array.isArray(list) && list.length) {
           setConfiguredDepartureReasons([...new Set([...list, ...DEPARTURE_REASONS])]);
         }
+        const comps = cfg.departmentsAndLists?.companies;
+        if (Array.isArray(comps) && comps.length) {
+          setConfiguredCompanies([
+            ...new Set(['SMART BUSINESS', 'BRAVOS', ...comps].map(normalizeCompanyToken).filter(Boolean)),
+          ]);
+        }
+        const shifts = cfg.departmentsAndLists?.shifts;
+        if (Array.isArray(shifts) && shifts.length) {
+          setConfiguredShifts([...new Set(['A', 'B', 'C', 'D', 'Other', ...shifts.map((s) => String(s).trim()).filter(Boolean)])]);
+        }
+        const stages = cfg.departmentsAndLists?.stages;
+        if (Array.isArray(stages) && stages.length) {
+          setConfiguredDepartments([...new Set(stages.map((s) => String(s).trim()).filter(Boolean))]);
+        }
       })
       .catch(() => {
-        // default DEPARTURE_REASONS already set
+        // defaults already set
       });
     return () => {
       active = false;
@@ -223,6 +268,23 @@ export function EmployeesPage({ mode }: { mode: EmployeesPageMode }) {
     loadData();
   }, [loadData]);
 
+  const assignedHrCompanies = useMemo(
+    () =>
+      [
+        ...new Set(
+          (user?.hrCompanies || user?.hr_companies || [])
+            .map(normalizeCompanyToken)
+            .filter(Boolean)
+        ),
+      ],
+    [user?.hrCompanies, user?.hr_companies]
+  );
+
+  const hrCompanyChoices = useMemo(() => {
+    const fromRows = rows.map((r) => normalizeCompanyToken(r.company)).filter(Boolean);
+    return [...new Set([...configuredCompanies, ...fromRows])];
+  }, [configuredCompanies, rows]);
+
   // Distinct dropdown options
   const metaOptions = useMemo(() => {
     const companies = [...new Set(rows.map((r) => String(r.company || '').trim()).filter(Boolean))].sort((a, b) =>
@@ -252,12 +314,15 @@ export function EmployeesPage({ mode }: { mode: EmployeesPageMode }) {
       }
 
       if (companyFilter !== '__ALL__') {
-        const compUpper = String(e.company || '').toUpperCase().trim();
+        const compUpper = normalizeCompanyToken(e.company);
         if (companyFilter === 'smart') {
-          if (!compUpper.includes('SMART') && compUpper !== 'SB') return false;
+          if (compUpper !== 'SMART BUSINESS') return false;
         } else if (companyFilter === 'bravos') {
-          if (!compUpper.includes('BRAVOS')) return false;
-        } else if (String(e.company || '').trim() !== companyFilter) {
+          if (compUpper !== 'BRAVOS') return false;
+        } else if (
+          compUpper !== normalizeCompanyToken(companyFilter) &&
+          String(e.company || '').trim() !== companyFilter
+        ) {
           return false;
         }
       }
@@ -374,6 +439,17 @@ export function EmployeesPage({ mode }: { mode: EmployeesPageMode }) {
       );
       return;
     }
+    if (nextRole === 'hr_manager') {
+      const existing =
+        Array.isArray(emp.hr_companies) && emp.hr_companies.length
+          ? emp.hr_companies.map(normalizeCompanyToken).filter(Boolean)
+          : emp.company
+            ? [normalizeCompanyToken(emp.company)].filter(Boolean)
+            : [];
+      setHrRoleEmp(emp);
+      setHrCompaniesInput([...new Set(existing)]);
+      return;
+    }
     try {
       await api(`/api/admin/employee/${emp.id}/role`, {
         method: 'PATCH',
@@ -405,6 +481,113 @@ export function EmployeesPage({ mode }: { mode: EmployeesPageMode }) {
       toast.error(err instanceof ApiError ? err.message : 'تعذر حفظ الصلاحية');
     } finally {
       setSupSaving(false);
+    }
+  };
+
+  const handleSaveHrRole = async () => {
+    if (!hrRoleEmp) return;
+    if (!hrCompaniesInput.length) {
+      toast.error('اختر شركة واحدة على الأقل لمدير الموارد البشرية.');
+      return;
+    }
+    setHrSaving(true);
+    try {
+      await api(`/api/admin/employee/${hrRoleEmp.id}/role`, {
+        method: 'PATCH',
+        body: JSON.stringify({ role: 'hr_manager', hrCompanies: hrCompaniesInput }),
+      });
+      toast.success(`تم تعيين ${hrRoleEmp.name} بصلاحية مدير الموارد البشرية للشركات المحددة`);
+      setHrRoleEmp(null);
+      loadData();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'تعذر حفظ الصلاحية');
+    } finally {
+      setHrSaving(false);
+    }
+  };
+
+  // Add Employee Handler
+  const addCompanyChoices = useMemo(
+    () => (isHrManager ? assignedHrCompanies : hrCompanyChoices),
+    [isHrManager, assignedHrCompanies, hrCompanyChoices]
+  );
+
+  const addShiftChoices = useMemo(
+    () => [...new Set([...configuredShifts, ...metaOptions.shifts])],
+    [configuredShifts, metaOptions.shifts]
+  );
+
+  const addDepartmentChoices = useMemo(
+    () => [...new Set([...configuredDepartments, ...metaOptions.departments])],
+    [configuredDepartments, metaOptions.departments]
+  );
+
+  const addEducationChoices = useMemo(
+    () => [...new Set(['خريج', 'طالب', ...metaOptions.educations])],
+    [metaOptions.educations]
+  );
+
+  const openAddDialog = () => {
+    const defaultCompany = isHrManager
+      ? assignedHrCompanies[0] || ''
+      : addCompanyChoices[0] || '';
+    setAddForm({
+      id: '',
+      emp_num: '',
+      name: '',
+      company: defaultCompany,
+      shift: addShiftChoices[0] || 'A',
+      department: '',
+      education: '',
+      residence: '',
+    });
+    setAddOpen(true);
+  };
+
+  const handleSaveAdd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const numericId = Number(addForm.id);
+    if (!Number.isInteger(numericId) || numericId <= 0) {
+      toast.error('أدخل رقم موظف (ID) صحيح.');
+      return;
+    }
+    if (!addForm.name.trim()) {
+      toast.error('اسم الموظف مطلوب.');
+      return;
+    }
+    if (isHrManager && !addForm.company.trim()) {
+      toast.error('اختر الشركة المسندة للموظف.');
+      return;
+    }
+    setAddSaving(true);
+    try {
+      const res = await api<{
+        ok: boolean;
+        created: boolean;
+        defaultPassword?: string;
+        message?: string;
+      }>('/api/admin/manual/employee', {
+        method: 'POST',
+        body: JSON.stringify({
+          id: numericId,
+          emp_num: addForm.emp_num.trim() ? Number(addForm.emp_num) : null,
+          name: addForm.name.trim(),
+          company: addForm.company.trim() || null,
+          shift: addForm.shift.trim() || null,
+          department: addForm.department.trim() || null,
+          education: addForm.education.trim() || null,
+          residence: addForm.residence.trim() || null,
+          createOnly: true,
+        }),
+      });
+      const pwNote = res.defaultPassword ? ` (كلمة المرور الافتراضية: ${res.defaultPassword})` : '';
+      toast.success(`${res.message || 'تم إضافة الموظف بنجاح'}${pwNote}`);
+      setAddOpen(false);
+      loadData();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'تعذر إضافة الموظف');
+    } finally {
+      setAddSaving(false);
     }
   };
 
@@ -614,26 +797,35 @@ export function EmployeesPage({ mode }: { mode: EmployeesPageMode }) {
             <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">{pageMeta.sub}</p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-1 rounded-xl border border-border bg-card p-1">
-            {SECTION_TABS.map((t) => {
-              const Icon = t.icon;
-              const active = t.mode === mode;
-              return (
-                <Link
-                  key={t.mode}
-                  to={t.to}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors',
-                    active
-                      ? 'bg-primary text-primary-foreground'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
-                  )}
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                  <span>{t.label}</span>
-                </Link>
-              );
-            })}
+          <div className="flex flex-wrap items-center gap-2">
+            {isAdminOrHr && mode !== 'left' && (
+              <Button type="button" size="sm" onClick={openAddDialog} className="gap-1.5">
+                <UserRoundPlus className="h-4 w-4" />
+                <span>إضافة موظف</span>
+              </Button>
+            )}
+
+            <div className="flex flex-wrap items-center gap-1 rounded-xl border border-border bg-card p-1">
+              {SECTION_TABS.map((t) => {
+                const Icon = t.icon;
+                const active = t.mode === mode;
+                return (
+                  <Link
+                    key={t.mode}
+                    to={t.to}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors',
+                      active
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/60'
+                    )}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    <span>{t.label}</span>
+                  </Link>
+                );
+              })}
+            </div>
           </div>
         </div>
 
@@ -693,20 +885,44 @@ export function EmployeesPage({ mode }: { mode: EmployeesPageMode }) {
                 />
               </div>
 
-              <NativeSelect
-                value={companyFilter}
-                onChange={(e) => setCompanyFilter(e.target.value)}
-                className="h-9 text-xs"
-              >
-                <option value="__ALL__">كل الشركات</option>
-                <option value="smart">SMART BUSINESS</option>
-                <option value="bravos">BRAVOS</option>
-                {metaOptions.companies.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </NativeSelect>
+              {isHrManager ? (
+                assignedHrCompanies.length === 1 ? (
+                  <Input
+                    value={assignedHrCompanies[0]}
+                    readOnly
+                    disabled
+                    className="h-9 text-xs bg-muted/50 font-bold"
+                  />
+                ) : (
+                  <NativeSelect
+                    value={companyFilter}
+                    onChange={(e) => setCompanyFilter(e.target.value)}
+                    className="h-9 text-xs"
+                  >
+                    <option value="__ALL__">كل الشركات المسندة</option>
+                    {assignedHrCompanies.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </NativeSelect>
+                )
+              ) : (
+                <NativeSelect
+                  value={companyFilter}
+                  onChange={(e) => setCompanyFilter(e.target.value)}
+                  className="h-9 text-xs"
+                >
+                  <option value="__ALL__">كل الشركات</option>
+                  <option value="smart">SMART BUSINESS</option>
+                  <option value="bravos">BRAVOS</option>
+                  {metaOptions.companies.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </NativeSelect>
+              )}
 
               <NativeSelect
                 value={shiftFilter}
@@ -784,6 +1000,7 @@ export function EmployeesPage({ mode }: { mode: EmployeesPageMode }) {
                       <option value="__ALL__">كل الصلاحيات</option>
                       <option value="employee">موظف</option>
                       <option value="supervisor">مشرف</option>
+                      <option value="hr_manager">مدير الموارد البشرية</option>
                       <option value="admin">مدير النظام</option>
                       <option value="system_creator">منشئ النظام</option>
                     </NativeSelect>
@@ -1021,7 +1238,7 @@ export function EmployeesPage({ mode }: { mode: EmployeesPageMode }) {
                                 >
                                   {emp.name}
                                 </Link>
-                                {emp.is_top5 && (
+                                {!isHrManager && emp.is_top5 && (
                                   <Badge
                                     variant="default"
                                     className="h-5 px-1.5 text-[10px] gap-0.5"
@@ -1083,6 +1300,7 @@ export function EmployeesPage({ mode }: { mode: EmployeesPageMode }) {
                                     >
                                       <option value="employee">موظف</option>
                                       <option value="supervisor">مشرف</option>
+                                      <option value="hr_manager">مدير الموارد البشرية</option>
                                       <option value="admin">مدير النظام</option>
                                       {isCreator && (
                                         <option value="system_creator">منشئ النظام</option>
@@ -1100,6 +1318,20 @@ export function EmployeesPage({ mode }: { mode: EmployeesPageMode }) {
                                           ({emp.supervisor_shifts.join(',')})
                                         </button>
                                       )}
+                                    {roleVal === 'hr_manager' && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRoleChange(emp, 'hr_manager')}
+                                        className="text-[10px] font-bold text-primary hover:underline cursor-pointer truncate max-w-[120px]"
+                                        title="تعديل شركات مدير الموارد البشرية"
+                                      >
+                                        (
+                                        {Array.isArray(emp.hr_companies) && emp.hr_companies.length
+                                          ? emp.hr_companies.join(' · ')
+                                          : 'تحديد الشركة'}
+                                        )
+                                      </button>
+                                    )}
                                   </div>
                                 ) : (
                                   <Badge variant="outline">{ROLE_LABELS[roleVal]}</Badge>
@@ -1273,6 +1505,177 @@ export function EmployeesPage({ mode }: { mode: EmployeesPageMode }) {
               {supSaving ? 'جاري الحفظ...' : 'حفظ الصلاحية'}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* HR Manager Multi-Company Dialog */}
+      <Dialog open={!!hrRoleEmp} onOpenChange={(o: boolean) => !o && setHrRoleEmp(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>تحديد الشركة المسؤولة (مدير الموارد البشرية)</DialogTitle>
+            <DialogDescription>
+              اختر شركة واحدة أو أكثر لعرض بيانات موظفيها فقط للمسؤول <b>{hrRoleEmp?.name}</b>
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-wrap gap-2 py-2">
+            {hrCompanyChoices.map((comp) => {
+              const checked = hrCompaniesInput.includes(comp);
+              return (
+                <button
+                  key={comp}
+                  type="button"
+                  onClick={() =>
+                    setHrCompaniesInput((prev) =>
+                      prev.includes(comp) ? prev.filter((x) => x !== comp) : [...prev, comp]
+                    )
+                  }
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-bold transition-colors cursor-pointer',
+                    checked
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : 'border-border bg-card text-foreground hover:bg-muted'
+                  )}
+                >
+                  {checked && <Check className="h-3.5 w-3.5" />}
+                  <span>{comp}</span>
+                </button>
+              );
+            })}
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setHrRoleEmp(null)} disabled={hrSaving}>
+              إلغاء
+            </Button>
+            <Button onClick={handleSaveHrRole} disabled={hrSaving}>
+              {hrSaving ? 'جاري الحفظ...' : 'حفظ الصلاحية'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Employee Dialog */}
+      <Dialog open={addOpen} onOpenChange={(o: boolean) => !addSaving && setAddOpen(o)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>إضافة موظف جديد</DialogTitle>
+            <DialogDescription>
+              أدخل بيانات الموظف الجديد وسيتم إنشاء حسابه تلقائياً بكلمة المرور الافتراضية للنظام.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSaveAdd} className="space-y-3.5 pt-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>الرقم التعريفي (ID) *</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  placeholder="مثال: 10540"
+                  value={addForm.id}
+                  onChange={(e) => setAddForm((f) => ({ ...f, id: e.target.value }))}
+                  required
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>كود الموظف (اختياري)</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  placeholder="يُستخدم ID تلقائياً عند تركه فارغاً"
+                  value={addForm.emp_num}
+                  onChange={(e) => setAddForm((f) => ({ ...f, emp_num: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1 sm:col-span-2">
+                <Label>الاسم الكامل *</Label>
+                <Input
+                  placeholder="اسم الموظف ثلاثي أو رباعي"
+                  value={addForm.name}
+                  onChange={(e) => setAddForm((f) => ({ ...f, name: e.target.value }))}
+                  required
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>الشركة {isHrManager ? '*' : ''}</Label>
+                <NativeSelect
+                  value={addForm.company}
+                  onChange={(e) => setAddForm((f) => ({ ...f, company: e.target.value }))}
+                  disabled={isHrManager && assignedHrCompanies.length === 1}
+                  required={isHrManager}
+                >
+                  {!isHrManager && <option value="">اختر الشركة...</option>}
+                  {addCompanyChoices.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </NativeSelect>
+              </div>
+              <div className="space-y-1">
+                <Label>الشيفت</Label>
+                <NativeSelect
+                  value={addForm.shift}
+                  onChange={(e) => setAddForm((f) => ({ ...f, shift: e.target.value }))}
+                >
+                  <option value="">اختر الشيفت...</option>
+                  {addShiftChoices.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </NativeSelect>
+              </div>
+              <div className="space-y-1">
+                <Label>القسم</Label>
+                <Input
+                  list="add-emp-departments"
+                  placeholder="اختر أو اكتب القسم"
+                  value={addForm.department}
+                  onChange={(e) => setAddForm((f) => ({ ...f, department: e.target.value }))}
+                />
+                <datalist id="add-emp-departments">
+                  {addDepartmentChoices.map((d) => (
+                    <option key={d} value={d} />
+                  ))}
+                </datalist>
+              </div>
+              <div className="space-y-1">
+                <Label>الفئة</Label>
+                <NativeSelect
+                  value={addForm.education}
+                  onChange={(e) => setAddForm((f) => ({ ...f, education: e.target.value }))}
+                >
+                  <option value="">اختر الفئة...</option>
+                  {addEducationChoices.map((ed) => (
+                    <option key={ed} value={ed}>
+                      {ed}
+                    </option>
+                  ))}
+                </NativeSelect>
+              </div>
+              <div className="space-y-1 sm:col-span-2">
+                <Label>الإقامة / العنوان</Label>
+                <Input
+                  placeholder="محل الإقامة (اختياري)"
+                  value={addForm.residence}
+                  onChange={(e) => setAddForm((f) => ({ ...f, residence: e.target.value }))}
+                />
+              </div>
+            </div>
+            <DialogFooter className="gap-2 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setAddOpen(false)}
+                disabled={addSaving}
+              >
+                إلغاء
+              </Button>
+              <Button type="submit" disabled={addSaving} className="gap-1.5">
+                <UserRoundPlus className="h-4 w-4" />
+                <span>{addSaving ? 'جاري الإضافة...' : 'إضافة الموظف'}</span>
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 

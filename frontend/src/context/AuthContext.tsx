@@ -9,7 +9,9 @@ interface AuthContextValue {
   token: string | null;
   publicConfig: PublicSystemConfigPayload | null;
   isCreator: boolean;
+  isHrManager: boolean;
   isAdminUp: boolean;
+  isAdminOrHr: boolean;
   isSupervisorUp: boolean;
   isEmployee: boolean;
   loginSession: (token: string, user: AuthUser) => void;
@@ -105,8 +107,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const role = user?.role;
   const isCreator = role === 'system_creator';
+  const isHrManager = role === 'hr_manager';
   const isAdminUp = role === 'system_creator' || role === 'admin';
-  const isSupervisorUp = isAdminUp || role === 'supervisor';
+  const isAdminOrHr = isAdminUp || isHrManager;
+  const isSupervisorUp = isAdminOrHr || role === 'supervisor';
   const isEmployee = role === 'employee';
 
   return (
@@ -116,7 +120,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         token,
         publicConfig,
         isCreator,
+        isHrManager,
         isAdminUp,
+        isAdminOrHr,
         isSupervisorUp,
         isEmployee,
         loginSession,

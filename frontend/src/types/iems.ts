@@ -1,4 +1,4 @@
-export type Role = 'system_creator' | 'admin' | 'supervisor' | 'employee';
+export type Role = 'system_creator' | 'admin' | 'hr_manager' | 'supervisor' | 'employee';
 
 export type EmployeeStatus = 'active' | 'left' | 'archive';
 
@@ -9,6 +9,8 @@ export interface AuthUser {
   shift?: string | null;
   supervisorShifts?: string[];
   supervisor_shifts?: string[];
+  hrCompanies?: string[];
+  hr_companies?: string[];
   company?: string | null;
   department?: string | null;
   must_change_password?: boolean;
@@ -31,6 +33,7 @@ export interface EmployeeRecord {
   departure_reason?: string | null;
   created_at?: string | null;
   supervisor_shifts?: string[];
+  hr_companies?: string[];
   is_primary_admin?: boolean;
   is_top5?: boolean;
 }
@@ -212,7 +215,11 @@ export interface EmployeeDetailPayload {
 
 export type RequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
 
-export type RequestCategoryKey = 'leaves_attendance' | 'financial' | 'employee_affairs';
+export type RequestCategoryKey =
+  | 'leaves_attendance'
+  | 'financial'
+  | 'employee_affairs'
+  | 'smart_business_services';
 
 export type RequestTypeKey =
   | 'exam_leave'
@@ -227,7 +234,8 @@ export type RequestTypeKey =
   | 'shift_transfer'
   | 'resignation'
   | 'resignation_withdrawal'
-  | 'smart_business_request';
+  | 'smart_business_request'
+  | 'medical_services';
 
 export type WorkflowRequestStatus =
   | 'submitted'
@@ -342,6 +350,7 @@ export interface RequestMetaPayload {
     decisionRoles: string[];
     supervisorAllowedTypes?: RequestTypeKey[];
     supervisorShifts?: string[];
+    hrCompanies?: string[];
     requireDecisionReason: boolean;
     allowEmployeeCancellation: boolean;
     allowReopenDecision: boolean;

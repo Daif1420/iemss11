@@ -670,7 +670,7 @@ function parseFlexibleDate(value) {
   if (value === null || value === undefined || value === '') return null;
   if (typeof value === 'number') return excelSerialToDate(value);
   const text = String(value).trim();
-  const m = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
+  const m = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
   if (m) {
     let [, d, mo, y] = m;
     if (y.length === 2) y = `20${y}`;

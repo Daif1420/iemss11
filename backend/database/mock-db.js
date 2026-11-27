@@ -52,6 +52,7 @@ function createInitialStore() {
           left_date: e.left_date || null,
           departure_reason: e.departure_reason || null,
           supervisor_shifts: Array.isArray(e.supervisor_shifts) ? e.supervisor_shifts : [],
+          hr_companies: Array.isArray(e.hr_companies) ? e.hr_companies : [],
         }));
       }
       if (Array.isArray(seed.employee_summary)) {
@@ -105,6 +106,7 @@ function createInitialStore() {
       left_date: null,
       departure_reason: null,
       supervisor_shifts: [],
+      hr_companies: [],
     };
     store.employees.unshift(admin0);
   } else {
@@ -131,6 +133,14 @@ function classifyCompany(company) {
   return null;
 }
 
+function normalizeCompanyTokenMock(company) {
+  const u = String(company || '').trim().toUpperCase();
+  if (!u) return '';
+  if (u.includes('SMART') || u === 'SB') return 'SMART BUSINESS';
+  if (u.includes('BRAVOS')) return 'BRAVOS';
+  return u;
+}
+
 function attendanceFlags(row) {
   const num = row.value_num;
   const txt = String(row.value_text || '').trim();
@@ -146,11 +156,16 @@ function attendanceFlags(row) {
 }
 
 function filterEmployeesWhere(sql, params, empList) {
-  let idx = 0;
   let rows = empList.slice();
   const s = sql;
 
+  if (/\b1\s*=\s*0\b/.test(s)) return [];
   if (/role\s*=\s*'employee'/i.test(s)) rows = rows.filter((e) => e.role === 'employee');
+  const roleInMatch = s.match(/role\s+in\s*\(([^)]+)\)/i);
+  if (roleInMatch) {
+    const allowed = [...roleInMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    if (allowed.length) rows = rows.filter((e) => allowed.includes(e.role));
+  }
   if (/COALESCE\s*\(\s*e?\.?status\s*,\s*'active'\s*\)\s*=\s*'active'/i.test(s)) {
     rows = rows.filter((e) => (e.status || 'active') === 'active');
   } else if (/e?\.?status\s*=\s*'left'/i.test(s)) {
@@ -165,8 +180,15 @@ function filterEmployeesWhere(sql, params, empList) {
   const inlineId = s.match(/AND\s+id\s*=\s*(\d+)/i);
   if (inlineId) rows = rows.filter((e) => Number(e.id) === Number(inlineId[1]));
 
+  // Apply canonical company ANY($n::text[]) filter if present (from addHrCompanySql)
+  for (const cm of s.matchAll(/\(CASE WHEN UPPER\(TRIM\(COALESCE\((?:e\.)?company,''\)\)\)[\s\S]+?END\)\s*=\s*ANY\(\$(\d+)::text\[\]\)/gi)) {
+    const pIdx = Number(cm[1]) - 1;
+    const arr = (Array.isArray(params[pIdx]) ? params[pIdx] : [params[pIdx]]).map(normalizeCompanyTokenMock);
+    rows = rows.filter((e) => arr.includes(normalizeCompanyTokenMock(e.company)));
+  }
+
   // Positional parameters in order of appearance
-  const tokens = [...s.matchAll(/(\b(?:e\.)?id\s*=\s*\$\d+|(?:e\.)?shift\s*=\s*ANY\(\$\d+::text\[\]\)|COALESCE\((?:e\.)?(company|department|shift),''\)\s*IN\s*\((?:\$\d+,?\s*)+\)|(?:e\.)?shift\s*IN\s*\((?:\$\d+,?\s*)+\)|(?:e\.)?shift\s*=\s*\$\d+|CAST\((?:e\.)?id AS TEXT\)\s*LIKE\s*\$\d+|e?\.?education\s*=\s*'([^']+)'|UPPER\(e\.company\)\s*LIKE\s*'%SMART%'|UPPER\(e\.company\)\s*LIKE\s*'%BRAVOS%')/gi)];
+  const tokens = [...s.matchAll(/(\b(?:e\.)?id\s*=\s*\$\d+|(?:e\.)?shift\s*=\s*ANY\(\$\d+::text\[\]\)|COALESCE\((?:e\.)?(company|department|shift),''\)\s*IN\s*\((?:\$\d+,?\s*)+\)|UPPER\(TRIM\(COALESCE\((?:e\.)?shift,''\)\)\)\s*IN\s*\((?:\$\d+,?\s*)+\)|(?:e\.)?shift\s*IN\s*\((?:\$\d+,?\s*)+\)|(?:e\.)?shift\s*=\s*\$\d+|CAST\((?:e\.)?id AS TEXT\)\s*LIKE\s*\$\d+|e?\.?education\s*=\s*'([^']+)'|UPPER\(e\.company\)\s*LIKE\s*'%SMART%'|UPPER\(e\.company\)\s*LIKE\s*'%BRAVOS%')/gi)];
   for (const m of tokens) {
     const frag = m[0];
     if (/UPPER\(e\.company\)\s*LIKE\s*'%SMART%'/i.test(frag)) {
@@ -183,6 +205,9 @@ function filterEmployeesWhere(sql, params, empList) {
       const pIdx = Number(frag.match(/\$(\d+)/)[1]) - 1;
       const arr = Array.isArray(params[pIdx]) ? params[pIdx] : [params[pIdx]];
       rows = rows.filter((e) => arr.includes(String(e.shift || '')));
+    } else if (/UPPER\(TRIM\(COALESCE\((?:e\.)?shift,''\)\)\)\s*IN/i.test(frag)) {
+      const pNums = [...frag.matchAll(/\$(\d+)/g)].map((x) => String(params[Number(x[1]) - 1] || '').trim().toUpperCase());
+      rows = rows.filter((e) => pNums.includes(String(e.shift || '').trim().toUpperCase()));
     } else if (/IN\s*\(/i.test(frag)) {
       const pNums = [...frag.matchAll(/\$(\d+)/g)].map((x) => params[Number(x[1]) - 1]);
       const colMatch = frag.match(/COALESCE\((?:e\.)?(company|department|shift)/i);
@@ -199,7 +224,6 @@ function filterEmployeesWhere(sql, params, empList) {
       const pIdx = Number(frag.match(/\$(\d+)/)[1]) - 1;
       rows = rows.filter((e) => Number(e.id) === Number(params[pIdx]));
     }
-    idx++;
   }
   return rows;
 }
@@ -210,6 +234,8 @@ function filterStageDailyWithEmployees(sql, params) {
     .map((sd) => ({ sd, e: empById.get(sd.employee_id) }))
     .filter((x) => Boolean(x.e));
 
+  if (/\b1\s*=\s*0\b/.test(sql)) return [];
+
   if (/e\.role\s*=\s*'employee'/i.test(sql)) {
     rows = rows.filter((x) => x.e.role === 'employee');
   }
@@ -219,12 +245,18 @@ function filterStageDailyWithEmployees(sql, params) {
   if (/sd\.stage\s*NOT\s*IN\s*\('الحضور',\s*'TOTAL TARGET %'\)/i.test(sql)) {
     rows = rows.filter((x) => x.sd.stage !== 'الحضور' && x.sd.stage !== 'TOTAL TARGET %');
   }
-  if (/TRIM\(COALESCE\(sd\.value_text,\s*''\)\)\s*=\s*'ب'/i.test(sql)) {
+  if (/WHERE[\s\S]*AND\s*TRIM\(COALESCE\(sd\.value_text,\s*''\)\)\s*=\s*'ب'/i.test(sql)) {
     rows = rows.filter((x) => String(x.sd.value_text || '').trim() === 'ب');
   }
 
+  for (const cm of sql.matchAll(/\(CASE WHEN UPPER\(TRIM\(COALESCE\((?:e\.)?company,''\)\)\)[\s\S]+?END\)\s*=\s*ANY\(\$(\d+)::text\[\]\)/gi)) {
+    const pIdx = Number(cm[1]) - 1;
+    const arr = (Array.isArray(params[pIdx]) ? params[pIdx] : [params[pIdx]]).map(normalizeCompanyTokenMock);
+    rows = rows.filter((x) => arr.includes(normalizeCompanyTokenMock(x.e.company)));
+  }
+
   // Apply positional conditions
-  const condRegex = /(e\.id\s*=\s*\$\d+|e\.shift\s*=\s*\$\d+|e\.shift\s*IN\s*\((?:\$\d+,?\s*)+\)|sd\.stage\s*IN\s*\((?:\$\d+,?\s*)+\)|COALESCE\(e\.(company|department|shift),''\)\s*IN\s*\((?:\$\d+,?\s*)+\)|sd\.entry_date\s*>=\s*\$\d+|sd\.entry_date\s*<=\s*\$\d+|CAST\(e\.id AS TEXT\)\s*LIKE\s*\$\d+)/gi;
+  const condRegex = /(e\.id\s*=\s*\$\d+|e\.shift\s*=\s*\$\d+|e\.shift\s*IN\s*\((?:\$\d+,?\s*)+\)|sd\.stage\s*IN\s*\((?:\$\d+,?\s*)+\)|UPPER\(TRIM\(COALESCE\(e\.shift,''\)\)\)\s*IN\s*\((?:\$\d+,?\s*)+\)|COALESCE\(e\.(company|department|shift),''\)\s*IN\s*\((?:\$\d+,?\s*)+\)|sd\.entry_date\s*>=\s*\$\d+|sd\.entry_date\s*<=\s*\$\d+|CAST\(e\.id AS TEXT\)\s*LIKE\s*\$\d+)/gi;
   for (const m of sql.matchAll(condRegex)) {
     const frag = m[0];
     if (/e\.id\s*=\s*\$(\d+)/i.test(frag)) {
@@ -236,6 +268,9 @@ function filterStageDailyWithEmployees(sql, params) {
     } else if (/e\.shift\s*IN/i.test(frag)) {
       const vals = [...frag.matchAll(/\$(\d+)/g)].map((p) => params[Number(p[1]) - 1]);
       rows = rows.filter((x) => vals.includes(x.e.shift));
+    } else if (/UPPER\(TRIM\(COALESCE\(e\.shift,''\)\)\)\s*IN/i.test(frag)) {
+      const vals = [...frag.matchAll(/\$(\d+)/g)].map((p) => String(params[Number(p[1]) - 1] || '').trim().toUpperCase());
+      rows = rows.filter((x) => vals.includes(String(x.e.shift || '').trim().toUpperCase()));
     } else if (/sd\.stage\s*IN/i.test(frag)) {
       const vals = [...frag.matchAll(/\$(\d+)/g)].map((p) => params[Number(p[1]) - 1]);
       rows = rows.filter((x) => vals.includes(x.sd.stage));
@@ -302,11 +337,11 @@ async function query(rawSql, params = []) {
     const emp = store.employees.find((e) => e.id === Number(params[0]) && e.role === 'employee');
     return { rows: emp ? [{ ...emp }] : [], rowCount: emp ? 1 : 0 };
   }
-  if (/select id, name, role, shift, supervisor_shifts, company, department from employees where id = \$1$/i.test(sql)) {
+  if (/select id, name, role, shift, supervisor_shifts,(?: hr_companies,)? company, department from employees where id = \$1$/i.test(sql)) {
     const emp = store.employees.find((e) => e.id === Number(params[0]));
     return { rows: emp ? [{ ...emp }] : [], rowCount: emp ? 1 : 0 };
   }
-  if (/select id, role(, shift(, left_date, departure_reason, status)?)? from employees where id = \$1/i.test(sql)) {
+  if (/select id, role(?:, shift)?(?:, company)?(?:, left_date, departure_reason, status)? from employees where id = \$1/i.test(sql)) {
     const emp = store.employees.find((e) => e.id === Number(params[0]));
     return { rows: emp ? [{ ...emp }] : [], rowCount: emp ? 1 : 0 };
   }
@@ -359,6 +394,7 @@ async function query(rawSql, params = []) {
       .filter((e) =>
         e.role === 'admin' ||
         e.role === 'system_creator' ||
+        e.role === 'hr_manager' ||
         (e.role === 'supervisor' && (e.shift === shiftVal || (e.supervisor_shifts || []).includes(shiftVal)))
       )
       .map((e) => ({ id: e.id }));
@@ -384,8 +420,8 @@ async function query(rawSql, params = []) {
     if (/created_at >=/i.test(sql)) {
       const now = new Date();
       const monthStart = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`;
-      let rows = store.employees.filter((e) => e.role === 'employee' && String(e.created_at || '') >= monthStart);
-      if (/e\.shift = \$1/i.test(sql)) rows = rows.filter((e) => e.shift === params[0]);
+      const rows = filterEmployeesWhere(sql, params, store.employees)
+        .filter((e) => String(e.created_at || '') >= monthStart);
       return { rows: [{ c: rows.length }], rowCount: 1 };
     }
     const rows = filterEmployeesWhere(sql, params, store.employees);
@@ -435,7 +471,8 @@ async function query(rawSql, params = []) {
     return { rows: dates.map((entry_date) => ({ entry_date })), rowCount: dates.length };
   }
   if (/select distinct shift from employees/i.test(sql)) {
-    const shifts = [...new Set(store.employees.filter((e) => e.role === 'employee' && e.shift && String(e.shift).trim() !== '').map((e) => e.shift))].sort();
+    const filtered = filterEmployeesWhere(sql, params, store.employees);
+    const shifts = [...new Set(filtered.filter((e) => e.role === 'employee' && e.shift && String(e.shift).trim() !== '').map((e) => e.shift))].sort();
     return { rows: shifts.map((shift) => ({ shift })), rowCount: shifts.length };
   }
   if (/select distinct coalesce\((company|department|shift),''\) v from employees/i.test(sql)) {
@@ -921,8 +958,15 @@ async function query(rawSql, params = []) {
     return { rows: [], rowCount: 0 };
   }
   if (/update employees set role = \$1, supervisor_shifts = \$2/i.test(sql)) {
-    const emp = store.employees.find((e) => e.id === Number(params[2]));
-    if (emp) { emp.role = params[0]; emp.supervisor_shifts = params[1] || []; return { rows: [], rowCount: 1 }; }
+    const hasHr = /hr_companies = \$3/i.test(sql);
+    const empId = Number(hasHr ? params[3] : params[2]);
+    const emp = store.employees.find((e) => e.id === empId);
+    if (emp) {
+      emp.role = params[0];
+      emp.supervisor_shifts = params[1] || [];
+      if (hasHr) emp.hr_companies = Array.isArray(params[2]) ? params[2] : [];
+      return { rows: [], rowCount: 1 };
+    }
     return { rows: [], rowCount: 0 };
   }
   if (/update employees set status='left',left_date=\$1,departure_reason=\$2 where id=\$3/i.test(sql)) {
@@ -958,15 +1002,52 @@ async function query(rawSql, params = []) {
     return { rows: [], rowCount: 1 };
   }
   if (/insert into employees\b/i.test(sql) && /values\s*\(/i.test(sql)) {
-    // Manual employee insert
-    const [id, emp_num, name, education, residence, company, shift, department, password_hash] = params;
-    const isLeft = /'left'/i.test(sql);
-    const rec = {
-      id: Number(id), emp_num: emp_num ?? id, name, education, residence, company,
-      shift: shift || null, target_shift: normalizeShift(shift), department, password_hash,
-      role: 'employee', must_change_password: false, status: isLeft ? 'left' : 'active',
-      created_at: new Date().toISOString(), left_date: null, departure_reason: null, supervisor_shifts: [],
-    };
+    // Manual / sheet employee insert
+    const colMatch = sql.match(/insert into employees\s*\(([^)]+)\)\s*values\s*\(([^)]+)\)/i);
+    let rec;
+    if (colMatch) {
+      const cols = colMatch[1].split(',').map((c) => c.trim().toLowerCase());
+      const valsRaw = colMatch[2].split(',').map((v) => v.trim());
+      const mapped = {};
+      cols.forEach((col, i) => {
+        const expr = valsRaw[i] || '';
+        const pm = expr.match(/^\$(\d+)/);
+        if (pm) mapped[col] = params[Number(pm[1]) - 1];
+        else if (/^'(.*)'$/.test(expr)) mapped[col] = expr.slice(1, -1);
+        else if (/^true$/i.test(expr)) mapped[col] = true;
+        else if (/^false$/i.test(expr)) mapped[col] = false;
+        else if (/^null$/i.test(expr)) mapped[col] = null;
+      });
+      rec = {
+        id: Number(mapped.id),
+        emp_num: mapped.emp_num ?? Number(mapped.id),
+        name: mapped.name,
+        education: mapped.education ?? null,
+        residence: mapped.residence ?? null,
+        company: mapped.company ?? null,
+        shift: mapped.shift || null,
+        target_shift: mapped.target_shift || normalizeShift(mapped.shift),
+        department: mapped.department ?? null,
+        password_hash: mapped.password_hash,
+        role: mapped.role || 'employee',
+        must_change_password: Boolean(mapped.must_change_password),
+        status: mapped.status || 'active',
+        created_at: new Date().toISOString(),
+        left_date: null,
+        departure_reason: null,
+        supervisor_shifts: [],
+        hr_companies: [],
+      };
+    } else {
+      const [id, emp_num, name, education, residence, company, shift, department, password_hash] = params;
+      const isLeft = /'left'/i.test(sql);
+      rec = {
+        id: Number(id), emp_num: emp_num ?? id, name, education, residence, company,
+        shift: shift || null, target_shift: normalizeShift(shift), department, password_hash,
+        role: 'employee', must_change_password: false, status: isLeft ? 'left' : 'active',
+        created_at: new Date().toISOString(), left_date: null, departure_reason: null, supervisor_shifts: [], hr_companies: [],
+      };
+    }
     store.employees.push(rec);
     return { rows: [rec], rowCount: 1 };
   }
@@ -1146,6 +1227,7 @@ async function query(rawSql, params = []) {
         {
           ...att,
           employee_id: reqRow.employee_id,
+          company: reqRow.company,
           shift: reqRow.shift,
           request_number: reqRow.request_number,
         },

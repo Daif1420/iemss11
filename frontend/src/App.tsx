@@ -3,6 +3,7 @@ import { Toaster } from 'sonner';
 import { AuthProvider } from '@/context/AuthContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { ProtectedRoute } from '@/components/layout/ProtectedRoute';
+import { OfflineIndicator } from '@/components/shared/OfflineIndicator';
 import { AuditLogsPage } from '@/pages/AuditLogsPage';
 import { EmployeeDetailPage } from '@/pages/EmployeeDetailPage';
 import { EmployeesPage } from '@/pages/EmployeesPage';
@@ -21,6 +22,7 @@ export function App() {
       <BrowserRouter>
         <AuthProvider>
           <Toaster dir="rtl" position="top-left" richColors closeButton />
+          <OfflineIndicator />
           <Routes>
             <Route path="/" element={<LoginPage />} />
             <Route path="/index.html" element={<LoginPage />} />
@@ -45,7 +47,7 @@ export function App() {
             <Route
               path="/admin-employees.html"
               element={
-                <ProtectedRoute roles={['supervisor', 'admin', 'system_creator']}>
+                <ProtectedRoute roles={['supervisor', 'hr_manager', 'admin', 'system_creator']}>
                   <EmployeesPage mode="all" />
                 </ProtectedRoute>
               }
@@ -53,7 +55,7 @@ export function App() {
             <Route
               path="/employees-current.html"
               element={
-                <ProtectedRoute roles={['supervisor', 'admin', 'system_creator']}>
+                <ProtectedRoute roles={['supervisor', 'hr_manager', 'admin', 'system_creator']}>
                   <EmployeesPage mode="current" />
                 </ProtectedRoute>
               }
@@ -61,7 +63,7 @@ export function App() {
             <Route
               path="/employees-left.html"
               element={
-                <ProtectedRoute roles={['supervisor', 'admin', 'system_creator']}>
+                <ProtectedRoute roles={['supervisor', 'hr_manager', 'admin', 'system_creator']}>
                   <EmployeesPage mode="left" />
                 </ProtectedRoute>
               }
@@ -69,7 +71,7 @@ export function App() {
             <Route
               path="/employees-new.html"
               element={
-                <ProtectedRoute roles={['supervisor', 'admin', 'system_creator']}>
+                <ProtectedRoute roles={['supervisor', 'hr_manager', 'admin', 'system_creator']}>
                   <EmployeesPage mode="new" />
                 </ProtectedRoute>
               }

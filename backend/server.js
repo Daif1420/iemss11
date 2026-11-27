@@ -25,6 +25,32 @@ app.get('/api/health', (req, res) => res.json({
   jwtConfigured: !!process.env.JWT_SECRET,
 }));
 
+function resolveGuidePdfPath() {
+  const candidates = [
+    path.join(__dirname, '../frontend/dist/IEMS_System_Guide.pdf'),
+    path.join(__dirname, '../frontend/public/IEMS_System_Guide.pdf'),
+  ];
+  return candidates.find((p) => fs.existsSync(p)) || null;
+}
+
+function handleGuidePdfRequest(req, res) {
+  const pdfPath = resolveGuidePdfPath();
+  if (!pdfPath) {
+    return res.status(404).json({ error: 'ملف الدليل التعريفي غير متوفر حالياً.' });
+  }
+  const forceDownload = req.query.download === '1' || req.query.download === 'true';
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader(
+    'Content-Disposition',
+    `${forceDownload ? 'attachment' : 'inline'}; filename="IEMS_System_Guide.pdf"`
+  );
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  return res.sendFile(pdfPath);
+}
+
+app.get('/api/guide/pdf', handleGuidePdfRequest);
+app.get('/IEMS_System_Guide.pdf', handleGuidePdfRequest);
+
 app.use('/api', async (req, res, next) => {
   try { await db.ensureDatabase(); next(); }
   catch (err) { console.error('[IEMS API] database bootstrap failed', err); next(err); }
@@ -43,7 +69,18 @@ app.use('/api', (req, res) => {
 
 const distDir = path.join(__dirname, '../frontend/dist');
 if (fs.existsSync(distDir)) {
-  app.use(express.static(distDir));
+  app.use(
+    express.static(distDir, {
+      setHeaders(res, filePath) {
+        if (filePath.endsWith('sw.js') || filePath.endsWith('registerSW.js')) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        } else if (filePath.endsWith('.webmanifest')) {
+          res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-cache');
+        }
+      },
+    })
+  );
   app.get(/^(?!\/api(?:\/|$)).*/, (req, res) => {
     res.sendFile(path.join(distDir, 'index.html'));
   });
@@ -62,7 +99,7 @@ const { maybeRunAutoPurge } = require('./utils/systemSettings');
 if (require.main === module) {
   const port = Number(process.env.PORT || 3000);
   if (db.isMock()) {
-    console.warn('[IEMS API] DATABASE_URL not set — using an empty in-memory mock database (development only)');
+    console.warn('[IEMS API] DATABASE_URL not set — using in-memory mock database seeded from database/initial-data.json');
   }
   app.listen(port, '0.0.0.0', () => {
     console.log(`[IEMS API] listening on http://0.0.0.0:${port}`);

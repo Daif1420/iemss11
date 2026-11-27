@@ -159,6 +159,7 @@ interface EmployeePerformanceSectionProps {
   showExportActions?: boolean;
   showAllResidenceField?: boolean;
   showBonusAndDeductions?: boolean;
+  hideTargets?: boolean;
   isSelfView?: boolean;
   afterHeroSlot?: ReactNode;
 }
@@ -171,10 +172,12 @@ export function EmployeePerformanceSection({
   showExportActions = true,
   showAllResidenceField = false,
   showBonusAndDeductions = true,
+  hideTargets = false,
   isSelfView = false,
   afterHeroSlot,
 }: EmployeePerformanceSectionProps) {
-  const { user } = useAuth();
+  const { user, isHrManager } = useAuth();
+  const hideTargetsView = Boolean(hideTargets || isHrManager);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [activeShiftTab, setActiveShiftTab] = useState<string>('__FIRST__');
   const [attendanceFilter, setAttendanceFilter] = useState<'all' | 'present' | 'absence'>('all');
@@ -449,7 +452,7 @@ export function EmployeePerformanceSection({
     ...(overtimeHours > 0
       ? [{ label: 'ساعات الإضافي', value: fmtHours(overtimeHours), tone: 'success' as const }]
       : []),
-    ...(showBonusAndDeductions && specialBonusDays > 0
+    ...(showBonusAndDeductions && !hideTargetsView && specialBonusDays > 0
       ? [
           {
             label: 'مكافآت خاصة (أيام)',
@@ -458,7 +461,7 @@ export function EmployeePerformanceSection({
           },
         ]
       : []),
-    ...(showBonusAndDeductions && specialDeductions > 0
+    ...(showBonusAndDeductions && !hideTargetsView && specialDeductions > 0
       ? [
           {
             label: 'خصومات خاصة',
@@ -467,7 +470,7 @@ export function EmployeePerformanceSection({
           },
         ]
       : []),
-    ...(supervisorMonthlyTargetTotal !== 0
+    ...(!hideTargetsView && supervisorMonthlyTargetTotal !== 0
       ? [
           {
             label: 'تارجت الإشراف',
@@ -583,7 +586,7 @@ export function EmployeePerformanceSection({
                 ))}
               </div>
 
-              {Array.isArray(data.myRanks) && data.myRanks.length > 0 && (
+              {!hideTargetsView && Array.isArray(data.myRanks) && data.myRanks.length > 0 && (
                 <div className="pt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
                   <span className="inline-flex items-center gap-1 font-extrabold text-amber-600 dark:text-amber-400">
                     <Award className="h-3.5 w-3.5 shrink-0" />
@@ -604,7 +607,7 @@ export function EmployeePerformanceSection({
             </div>
           </div>
 
-          {showExportActions && (
+          {showExportActions && !hideTargetsView && (
             <div className="flex flex-wrap items-center gap-1.5 shrink-0 no-print">
               <ExportActionButton kind="excel" onClick={handleExportExcel} />
               <ExportActionButton kind="pdf" loading={pdfBusy} onClick={handleExportPdf} />
@@ -614,6 +617,7 @@ export function EmployeePerformanceSection({
         </div>
 
         {/* Focal Showcase Band: Wide Horizontal Recharts Step-Wave Performance Spectrum */}
+        {!hideTargetsView && (
         <div className="px-5 py-5 sm:px-7 sm:py-6 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
             <div className="space-y-1.5">
@@ -866,12 +870,13 @@ export function EmployeePerformanceSection({
             </div>
           )}
         </div>
+        )}
 
         {/* 2. Primary KPI Strip (No duplicate overall percentage; Work Nature Allowance in its own KPI card when > 0) */}
         <div
           className={cn(
             'grid grid-cols-1 border-t border-border/70 divide-y sm:divide-y-0 sm:divide-x sm:divide-x-reverse divide-border/70 bg-secondary/20',
-            showBonusAndDeductions && hasWorkNature
+            showBonusAndDeductions && !hideTargetsView && hasWorkNature
               ? 'sm:grid-cols-2 lg:grid-cols-4'
               : 'sm:grid-cols-3'
           )}
@@ -909,7 +914,7 @@ export function EmployeePerformanceSection({
             </div>
           </div>
 
-          {showBonusAndDeductions ? (
+          {showBonusAndDeductions && !hideTargetsView ? (
             <>
               <div className="p-4 space-y-1">
                 <div className="flex items-center justify-between gap-2 text-xs font-semibold text-muted-foreground">
@@ -961,68 +966,72 @@ export function EmployeePerformanceSection({
       {/* 3. Two-Column Analytics & Structured Breakdown */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
         {/* Stage-by-Stage Target Progress Bars */}
-        <Card className="lg:col-span-7 flex flex-col">
-          <CardHeader className="pb-3 flex-row items-center justify-between space-y-0 border-b border-border/70">
-            <div className="flex items-center gap-2">
-              <BarChart3 className="h-4 w-4 text-primary" />
-              <div>
-                <CardTitle className="text-sm font-extrabold">تحليل التارجت حسب المرحلة</CardTitle>
-                <CardDescription className="text-[11px]">
-                  مقارنة الإنجاز الفعلي بالتارجت المطلوب لكل مرحلة
-                </CardDescription>
+        {!hideTargetsView && (
+          <Card className="lg:col-span-7 flex flex-col">
+            <CardHeader className="pb-3 flex-row items-center justify-between space-y-0 border-b border-border/70">
+              <div className="flex items-center gap-2">
+                <BarChart3 className="h-4 w-4 text-primary" />
+                <div>
+                  <CardTitle className="text-sm font-extrabold">تحليل التارجت حسب المرحلة</CardTitle>
+                  <CardDescription className="text-[11px]">
+                    مقارنة الإنجاز الفعلي بالتارجت المطلوب لكل مرحلة
+                  </CardDescription>
+                </div>
               </div>
-            </div>
-          </CardHeader>
-          <CardContent className="pt-4 flex-1">
-            {stageProgressList.length === 0 ? (
-              <div className="py-10 text-center text-xs text-muted-foreground">
-                لا توجد مراحل إنتاجية مسجلة في الفترة المختارة.
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {stageProgressList.map((st) => {
-                  const pctWidth =
-                    st.ratio !== null ? Math.max(4, Math.min(100, Math.round(st.ratio * 100))) : 100;
-                  return (
-                    <div key={st.stage} className="space-y-1.5">
-                      <div className="flex items-center justify-between gap-3 text-xs">
-                        <span className="font-bold text-foreground truncate">{st.stage}</span>
-                        <div className="flex items-center gap-3 shrink-0 tabular-nums">
-                          <span className="text-muted-foreground">
-                            <strong className="text-foreground">{fmtDecimal(st.achieved)}</strong>
-                            {st.target !== null ? ` / ${fmtDecimal(st.target)}` : ''}
-                          </span>
-                          <span className="min-w-[44px] text-end">
-                            <PercentText value={st.ratio} />
-                          </span>
+            </CardHeader>
+            <CardContent className="pt-4 flex-1">
+              {stageProgressList.length === 0 ? (
+                <div className="py-10 text-center text-xs text-muted-foreground">
+                  لا توجد مراحل إنتاجية مسجلة في الفترة المختارة.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {stageProgressList.map((st) => {
+                    const pctWidth =
+                      st.ratio !== null ? Math.max(4, Math.min(100, Math.round(st.ratio * 100))) : 100;
+                    return (
+                      <div key={st.stage} className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-3 text-xs">
+                          <span className="font-bold text-foreground truncate">{st.stage}</span>
+                          <div className="flex items-center gap-3 shrink-0 tabular-nums">
+                            <span className="text-muted-foreground">
+                              <strong className="text-foreground">{fmtDecimal(st.achieved)}</strong>
+                              {st.target !== null ? ` / ${fmtDecimal(st.target)}` : ''}
+                            </span>
+                            <span className="min-w-[44px] text-end">
+                              <PercentText value={st.ratio} />
+                            </span>
+                          </div>
+                        </div>
+                        <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
+                          <div
+                            className={cn(
+                              'h-full rounded-full transition-all',
+                              st.ratio !== null ? barColorClass(st.ratio) : 'bg-primary/65'
+                            )}
+                            style={{ width: `${pctWidth}%` }}
+                          />
                         </div>
                       </div>
-                      <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
-                        <div
-                          className={cn(
-                            'h-full rounded-full transition-all',
-                            st.ratio !== null ? barColorClass(st.ratio) : 'bg-primary/65'
-                          )}
-                          style={{ width: `${pctWidth}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Attendance, Leaves & Financial Hairline List (Zero values omitted) */}
-        <Card className="lg:col-span-5 flex flex-col">
+        <Card className={cn(hideTargetsView ? 'lg:col-span-12' : 'lg:col-span-5', 'flex flex-col')}>
           <CardHeader className="pb-3 flex-row items-center justify-between space-y-0 border-b border-border/70">
             <div className="flex items-center gap-2">
               <Clock className="h-4 w-4 text-primary" />
               <div>
                 <CardTitle className="text-sm font-extrabold">تفاصيل الانضباط والساعات</CardTitle>
                 <CardDescription className="text-[11px]">
-                  رصيد الإجازات، التأخيرات، والحوافز المعتمدة
+                  {hideTargetsView
+                    ? 'رصيد الإجازات، الغياب، وساعات الإضافي والتأخير'
+                    : 'رصيد الإجازات، التأخيرات، والحوافز المعتمدة'}
                 </CardDescription>
               </div>
             </div>
@@ -1275,7 +1284,7 @@ export function EmployeePerformanceSection({
       </Card>
 
       {/* 4. Supervisor Targets Breakdown */}
-      {supervisorSections.length > 0 && (
+      {!hideTargetsView && supervisorSections.length > 0 && (
         <Card>
           <CardHeader className="pb-3 flex-row items-center gap-2 space-y-0 border-b border-border/70">
             <Target className="h-4 w-4 text-primary" />
@@ -1386,6 +1395,7 @@ export function EmployeePerformanceSection({
       )}
 
       {/* 5. Daily Details Matrix / Timeline View */}
+      {!hideTargetsView && (
       <Card>
         <CardHeader className="pb-3 flex-row flex-wrap items-center justify-between gap-3 space-y-0 border-b border-border/70">
           <div className="flex items-center gap-2">
@@ -1888,6 +1898,7 @@ export function EmployeePerformanceSection({
           })}
         </CardContent>
       </Card>
+      )}
     </div>
   );
 }

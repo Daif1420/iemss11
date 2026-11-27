@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import {
   Award,
+  BookOpen,
   Check,
   Copy,
   Eye,
@@ -21,7 +22,9 @@ import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
 import { api, ApiError } from '@/lib/api';
+import { downloadSystemGuidePdf } from '@/lib/export';
 import type { AuthUser } from '@/types/iems';
+import { PWAInstallButton } from '@/components/shared/PWAInstallButton';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -45,6 +48,20 @@ export function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [guideDownloading, setGuideDownloading] = useState(false);
+
+  const handleDownloadGuide = async () => {
+    if (guideDownloading) return;
+    setGuideDownloading(true);
+    try {
+      await downloadSystemGuidePdf();
+      toast.success('تم بدء تحميل دليل النظام التعريفي (PDF)');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'تعذر تحميل دليل النظام');
+    } finally {
+      setGuideDownloading(false);
+    }
+  };
 
   // Forgot Password Interactive Request Form
   const [forgotOpen, setForgotOpen] = useState(false);
@@ -196,8 +213,8 @@ export function LoginPage() {
     >
       {/* Right Column in RTL: Sign-in Form Panel */}
       <div className="relative flex flex-col justify-between p-6 sm:p-10 bg-white dark:bg-[#000000] lg:border-l border-slate-200 dark:border-zinc-900">
-        {/* Top right corner theme switch */}
-        <div className="flex items-center justify-start">
+        {/* Top right corner theme switch + PWA install */}
+        <div className="flex items-center justify-between gap-2">
           <Button
             type="button"
             variant="outline"
@@ -212,6 +229,7 @@ export function LoginPage() {
               <Moon className="h-4 w-4 text-slate-600" />
             )}
           </Button>
+          <PWAInstallButton variant="button" />
         </div>
 
         {/* Centered Login Form Stack */}
@@ -337,6 +355,22 @@ export function LoginPage() {
             </button>
             .
           </p>
+
+          <div className="mt-3 flex justify-center">
+            <button
+              type="button"
+              onClick={handleDownloadGuide}
+              disabled={guideDownloading}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50/90 dark:bg-zinc-900/70 px-3 py-1.5 text-[11px] font-bold text-[#065BAB] dark:text-blue-400 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer disabled:opacity-60"
+            >
+              {guideDownloading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <BookOpen className="h-3.5 w-3.5" />
+              )}
+              <span>تحميل دليل استخدام النظام (PDF)</span>
+            </button>
+          </div>
         </div>
 
         {/* Bottom Copyright matching classic footer */}
