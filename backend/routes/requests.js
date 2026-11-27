@@ -40,19 +40,6 @@ const DEFAULT_FALLBACK_STAGES = [
   'أخرى',
 ];
 
-const DEFAULT_MODULE_CONFIG = {
-  decisionRoles: ['system_creator', 'admin', 'hr_manager'],
-  allowSupervisorDecision: false,
-  requireDecisionReason: false,
-  allowEmployeeCancellation: true,
-  allowReopenDecision: true,
-  preventDuplicatePending: false,
-  enforceAdvanceWindow: false,
-  advanceWindowStartDay: 10,
-  advanceWindowEndDay: 20,
-  maxAttachmentSizeMb: 5,
-};
-
 const REQUEST_CATALOG = {
   exam_leave: {
     category: 'leaves_attendance',

@@ -20,7 +20,6 @@ function createInitialStore() {
     import_history: [],
     system_settings: [],
     notifications: [],
-    push_subscriptions: [],
     missing_data_requests: [],
     employee_requests: [],
     request_attachments: [],
@@ -32,7 +31,6 @@ function createInitialStore() {
       audit_logs: 1,
       import_history: 1,
       notifications: 1,
-      push_subscriptions: 1,
       missing_data_requests: 1,
       employee_requests: 1,
       request_attachments: 1,
@@ -158,7 +156,6 @@ function attendanceFlags(row) {
 }
 
 function filterEmployeesWhere(sql, params, empList) {
-  let idx = 0;
   let rows = empList.slice();
   const s = sql;
 
@@ -227,7 +224,6 @@ function filterEmployeesWhere(sql, params, empList) {
       const pIdx = Number(frag.match(/\$(\d+)/)[1]) - 1;
       rows = rows.filter((e) => Number(e.id) === Number(params[pIdx]));
     }
-    idx++;
   }
   return rows;
 }
@@ -953,75 +949,6 @@ async function query(rawSql, params = []) {
     let changes = 0;
     store.notifications.forEach((n) => { if (n.id === id && n.user_id === uid) { n.is_read = true; changes++; } });
     return { rows: [], rowCount: changes };
-  }
-  if (/select user_id, count\(\*\)::int as c from notifications where user_id = any\(\$1::int\[\]\) and is_read = false group by user_id/i.test(sql)) {
-    const ids = (Array.isArray(params[0]) ? params[0] : []).map(Number);
-    const counts = new Map();
-    for (const n of store.notifications) {
-      if (ids.includes(n.user_id) && !n.is_read) {
-        counts.set(n.user_id, (counts.get(n.user_id) || 0) + 1);
-      }
-    }
-    const rows = [...counts.entries()].map(([user_id, c]) => ({ user_id, c }));
-    return { rows, rowCount: rows.length };
-  }
-
-  // 10b. Push subscriptions (PWA notifications)
-  if (/from push_subscriptions where user_id = \$1 and endpoint = \$2/i.test(sql)) {
-    const row = store.push_subscriptions.find((s) => s.user_id === Number(params[0]) && s.endpoint === params[1]);
-    return { rows: row ? [{ ...row }] : [], rowCount: row ? 1 : 0 };
-  }
-  if (/from push_subscriptions where user_id = \$1$/i.test(sql)) {
-    const rows = store.push_subscriptions.filter((s) => s.user_id === Number(params[0])).map((s) => ({ ...s }));
-    return { rows, rowCount: rows.length };
-  }
-  if (/from push_subscriptions where user_id = any\(\$1::int\[\]\)/i.test(sql)) {
-    const ids = (Array.isArray(params[0]) ? params[0] : []).map(Number);
-    const rows = store.push_subscriptions.filter((s) => ids.includes(s.user_id)).map((s) => ({ ...s }));
-    return { rows, rowCount: rows.length };
-  }
-  if (/insert into push_subscriptions/i.test(sql)) {
-    const [user_id, endpoint, p256dh, auth, user_agent] = params;
-    const nowIso = new Date().toISOString();
-    const existing = store.push_subscriptions.find((s) => s.endpoint === endpoint);
-    if (existing) {
-      existing.user_id = Number(user_id);
-      existing.p256dh = p256dh;
-      existing.auth = auth;
-      existing.user_agent = user_agent || null;
-      existing.updated_at = nowIso;
-      return { rows: [{ ...existing }], rowCount: 1 };
-    }
-    const rec = {
-      id: store.seq.push_subscriptions++,
-      user_id: Number(user_id),
-      endpoint,
-      p256dh,
-      auth,
-      user_agent: user_agent || null,
-      created_at: nowIso,
-      updated_at: nowIso,
-    };
-    store.push_subscriptions.push(rec);
-    return { rows: [{ ...rec }], rowCount: 1 };
-  }
-  if (/delete from push_subscriptions where user_id = \$1 and endpoint = \$2/i.test(sql)) {
-    const prev = store.push_subscriptions.length;
-    store.push_subscriptions = store.push_subscriptions.filter(
-      (s) => !(s.user_id === Number(params[0]) && s.endpoint === params[1])
-    );
-    return { rows: [], rowCount: prev - store.push_subscriptions.length };
-  }
-  if (/delete from push_subscriptions where endpoint = \$1/i.test(sql)) {
-    const prev = store.push_subscriptions.length;
-    store.push_subscriptions = store.push_subscriptions.filter((s) => s.endpoint !== params[0]);
-    return { rows: [], rowCount: prev - store.push_subscriptions.length };
-  }
-  if (/delete from push_subscriptions where endpoint = any\(\$1::text\[\]\)/i.test(sql)) {
-    const eps = new Set(Array.isArray(params[0]) ? params[0] : []);
-    const prev = store.push_subscriptions.length;
-    store.push_subscriptions = store.push_subscriptions.filter((s) => !eps.has(s.endpoint));
-    return { rows: [], rowCount: prev - store.push_subscriptions.length };
   }
 
   // 11. Employee mutations (role, password, profile, departure, delete, manual)

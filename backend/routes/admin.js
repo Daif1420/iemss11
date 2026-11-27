@@ -8,7 +8,6 @@ const {
   requireSupervisor,
   requireUploader,
   requireSystemCreator,
-  isCreator,
   isAdminOrHr,
   isHrManager,
   normalizeCompaniesList,

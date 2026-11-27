@@ -733,7 +733,6 @@ function parseSupervisorTargetSheet(rows, sheetLabel) {
   snCols.forEach((snCol, idx) => {
     const nextSn = snCols[idx + 1] ?? Infinity;
     const dateCol = snCol - 2;
-    const dayCol = snCol - 1;
     const section = cleanText(titleRow[snCol]) || `${sheetLabel} ${idx + 1}`;
 
     // Find target-daily / target-monthly columns to the right of snCol,

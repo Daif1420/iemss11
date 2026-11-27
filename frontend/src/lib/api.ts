@@ -1,33 +1,58 @@
 import type { AuthUser } from '@/types/iems';
 
-let memoryToken: string | null = null;
-let memoryUser: AuthUser | null = null;
-let welcomePending = false;
+const TOKEN_KEY = 'iems_token';
+const USER_KEY = 'iems_user';
+const WELCOME_KEY = 'iems_show_welcome';
 
 export const authStorage = {
   getToken(): string | null {
-    return memoryToken;
+    try {
+      return sessionStorage.getItem(TOKEN_KEY);
+    } catch {
+      return null;
+    }
   },
   getUser(): AuthUser | null {
-    return memoryUser;
+    try {
+      const raw = sessionStorage.getItem(USER_KEY);
+      return raw ? (JSON.parse(raw) as AuthUser) : null;
+    } catch {
+      return null;
+    }
   },
   setSession(token: string, user: AuthUser, showWelcome = false) {
-    memoryToken = token;
-    memoryUser = user;
-    if (showWelcome) welcomePending = true;
+    try {
+      sessionStorage.setItem(TOKEN_KEY, token);
+      sessionStorage.setItem(USER_KEY, JSON.stringify(user));
+      if (showWelcome) sessionStorage.setItem(WELCOME_KEY, '1');
+    } catch {
+      // ignore storage errors
+    }
   },
   updateUser(user: AuthUser) {
-    memoryUser = user;
+    try {
+      sessionStorage.setItem(USER_KEY, JSON.stringify(user));
+    } catch {
+      // ignore storage errors
+    }
   },
   consumeWelcome(): boolean {
-    const show = welcomePending;
-    welcomePending = false;
-    return show;
+    try {
+      const show = sessionStorage.getItem(WELCOME_KEY) === '1';
+      if (show) sessionStorage.removeItem(WELCOME_KEY);
+      return show;
+    } catch {
+      return false;
+    }
   },
   clear() {
-    memoryToken = null;
-    memoryUser = null;
-    welcomePending = false;
+    try {
+      sessionStorage.removeItem(TOKEN_KEY);
+      sessionStorage.removeItem(USER_KEY);
+      sessionStorage.removeItem(WELCOME_KEY);
+    } catch {
+      // ignore storage errors
+    }
   },
 };
 
@@ -50,22 +75,15 @@ export async function api<T = unknown>(path: string, opts: RequestInit = {}): Pr
   const token = authStorage.getToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'X-Requested-With': 'XMLHttpRequest',
     ...(opts.headers as Record<string, string> | undefined),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(path, {
-    ...opts,
-    credentials: 'include',
-    headers,
-  });
+  const res = await fetch(path, { ...opts, headers });
   if (res.status === 401) {
-    if (!path.startsWith('/api/auth/login') && !path.startsWith('/api/auth/me')) {
+    if (!path.startsWith('/api/auth/login')) {
       authStorage.clear();
       onUnauthorizedCallback?.();
-    } else if (path.startsWith('/api/auth/me')) {
-      authStorage.clear();
     }
   }
   const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
@@ -84,9 +102,7 @@ export function apiUploadWithProgress<T = unknown>(
     const token = authStorage.getToken();
     const xhr = new XMLHttpRequest();
     xhr.open('POST', path);
-    xhr.withCredentials = true;
     xhr.setRequestHeader('Content-Type', 'application/json');
-    xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
     if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
     xhr.responseType = 'text';
 
@@ -126,13 +142,9 @@ export function apiUploadWithProgress<T = unknown>(
 
 export async function fetchAuthenticatedBlobUrl(path: string): Promise<string | null> {
   const token = authStorage.getToken();
-  const headers: Record<string, string> = {
-    'X-Requested-With': 'XMLHttpRequest',
-  };
-  if (token) headers.Authorization = `Bearer ${token}`;
+  if (!token) return null;
   const res = await fetch(path, {
-    credentials: 'include',
-    headers,
+    headers: { Authorization: `Bearer ${token}` },
     cache: 'no-store',
   });
   if (!res.ok) return null;

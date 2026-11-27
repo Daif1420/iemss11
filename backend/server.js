@@ -13,35 +13,7 @@ const requestRoutes = require('./routes/requests');
 
 const app = express();
 app.set('trust proxy', 1);
-app.use((req, res, next) => {
-  const reqOrigin = req.headers.origin;
-  const fwdHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim().toLowerCase();
-  const host = (fwdHost || String(req.headers.host || '')).trim().toLowerCase();
-
-  let allowedOrigin = false;
-  if (reqOrigin) {
-    try {
-      const u = new URL(reqOrigin);
-      const originHost = u.host.toLowerCase();
-      const originHostname = u.hostname.toLowerCase();
-      if (
-        (host && originHost === host) ||
-        originHostname === 'localhost' ||
-        originHostname === '127.0.0.1'
-      ) {
-        allowedOrigin = reqOrigin;
-      }
-    } catch {
-      allowedOrigin = false;
-    }
-  }
-
-  return cors({
-    origin: allowedOrigin || false,
-    credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-  })(req, res, next);
-});
+app.use(cors());
 app.use(express.json({ limit: '15mb' }));
 
 const db = require('./database/init');
@@ -100,7 +72,7 @@ if (fs.existsSync(distDir)) {
   app.use(
     express.static(distDir, {
       setHeaders(res, filePath) {
-        if (filePath.endsWith('sw.js') || filePath.endsWith('registerSW.js') || filePath.endsWith('index.html')) {
+        if (filePath.endsWith('sw.js') || filePath.endsWith('registerSW.js')) {
           res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         } else if (filePath.endsWith('.webmanifest')) {
           res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
@@ -110,7 +82,6 @@ if (fs.existsSync(distDir)) {
     })
   );
   app.get(/^(?!\/api(?:\/|$)).*/, (req, res) => {
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.sendFile(path.join(distDir, 'index.html'));
   });
 }
