@@ -79,7 +79,7 @@ if (manifest.length > 0) {
   precacheAndRoute(manifest);
   registerRoute(
     new NavigationRoute(createHandlerBoundToURL('/index.html'), {
-      denylist: [/^\/api\//, /^\/IEMS_System_Guide\.pdf$/],
+      denylist: [/^\/api\//],
     })
   );
 }

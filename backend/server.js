@@ -13,7 +13,35 @@ const requestRoutes = require('./routes/requests');
 
 const app = express();
 app.set('trust proxy', 1);
-app.use(cors());
+app.use((req, res, next) => {
+  const reqOrigin = req.headers.origin;
+  const fwdHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim().toLowerCase();
+  const host = (fwdHost || String(req.headers.host || '')).trim().toLowerCase();
+
+  let allowedOrigin = false;
+  if (reqOrigin) {
+    try {
+      const u = new URL(reqOrigin);
+      const originHost = u.host.toLowerCase();
+      const originHostname = u.hostname.toLowerCase();
+      if (
+        (host && originHost === host) ||
+        originHostname === 'localhost' ||
+        originHostname === '127.0.0.1'
+      ) {
+        allowedOrigin = reqOrigin;
+      }
+    } catch {
+      allowedOrigin = false;
+    }
+  }
+
+  return cors({
+    origin: allowedOrigin || false,
+    credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  })(req, res, next);
+});
 app.use(express.json({ limit: '15mb' }));
 
 const db = require('./database/init');
@@ -24,32 +52,6 @@ app.get('/api/health', (req, res) => res.json({
   databaseConfigured: !!process.env.DATABASE_URL,
   jwtConfigured: !!process.env.JWT_SECRET,
 }));
-
-function resolveGuidePdfPath() {
-  const candidates = [
-    path.join(__dirname, '../frontend/dist/IEMS_System_Guide.pdf'),
-    path.join(__dirname, '../frontend/public/IEMS_System_Guide.pdf'),
-  ];
-  return candidates.find((p) => fs.existsSync(p)) || null;
-}
-
-function handleGuidePdfRequest(req, res) {
-  const pdfPath = resolveGuidePdfPath();
-  if (!pdfPath) {
-    return res.status(404).json({ error: 'ملف الدليل التعريفي غير متوفر حالياً.' });
-  }
-  const forceDownload = req.query.download === '1' || req.query.download === 'true';
-  res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader(
-    'Content-Disposition',
-    `${forceDownload ? 'attachment' : 'inline'}; filename="IEMS_System_Guide.pdf"`
-  );
-  res.setHeader('Cache-Control', 'public, max-age=300');
-  return res.sendFile(pdfPath);
-}
-
-app.get('/api/guide/pdf', handleGuidePdfRequest);
-app.get('/IEMS_System_Guide.pdf', handleGuidePdfRequest);
 
 app.use('/api', async (req, res, next) => {
   try { await db.ensureDatabase(); next(); }
@@ -72,7 +74,7 @@ if (fs.existsSync(distDir)) {
   app.use(
     express.static(distDir, {
       setHeaders(res, filePath) {
-        if (filePath.endsWith('sw.js') || filePath.endsWith('registerSW.js')) {
+        if (filePath.endsWith('sw.js') || filePath.endsWith('registerSW.js') || filePath.endsWith('index.html')) {
           res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         } else if (filePath.endsWith('.webmanifest')) {
           res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
@@ -82,6 +84,7 @@ if (fs.existsSync(distDir)) {
     })
   );
   app.get(/^(?!\/api(?:\/|$)).*/, (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.sendFile(path.join(distDir, 'index.html'));
   });
 }

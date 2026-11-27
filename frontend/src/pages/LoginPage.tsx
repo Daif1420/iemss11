@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import {
   Award,
-  BookOpen,
   Check,
   Copy,
   Eye,
@@ -22,7 +21,6 @@ import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
 import { api, ApiError } from '@/lib/api';
-import { downloadSystemGuidePdf } from '@/lib/export';
 import type { AuthUser } from '@/types/iems';
 import { PWAInstallButton } from '@/components/shared/PWAInstallButton';
 import { Button } from '@/components/ui/button';
@@ -39,29 +37,16 @@ import {
 } from '@/components/ui/dialog';
 
 export function LoginPage() {
-  const { user, token, loginSession } = useAuth();
+  const { user, token, authLoading, loginSession } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
 
   const [empId, setEmpId] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const [guideDownloading, setGuideDownloading] = useState(false);
-
-  const handleDownloadGuide = async () => {
-    if (guideDownloading) return;
-    setGuideDownloading(true);
-    try {
-      await downloadSystemGuidePdf();
-      toast.success('تم بدء تحميل دليل النظام التعريفي (PDF)');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'تعذر تحميل دليل النظام');
-    } finally {
-      setGuideDownloading(false);
-    }
-  };
 
   // Forgot Password Interactive Request Form
   const [forgotOpen, setForgotOpen] = useState(false);
@@ -160,6 +145,18 @@ export function LoginPage() {
     return `https://wa.me/${num}?text=${encodeURIComponent(forgotMessageText)}`;
   }, [supportWhatsappNumber, forgotMessageText]);
 
+  if (authLoading) {
+    return (
+      <div
+        dir="rtl"
+        className="min-h-screen flex flex-col items-center justify-center gap-3 bg-white dark:bg-[#000000] text-slate-900 dark:text-zinc-100"
+      >
+        <Loader2 className="h-7 w-7 animate-spin text-[#065BAB] dark:text-blue-400" />
+        <p className="text-xs font-bold text-slate-500 dark:text-zinc-400">جاري التحقق من الجلسة...</p>
+      </div>
+    );
+  }
+
   if (token && user) {
     return <Navigate to="/home.html" replace />;
   }
@@ -177,7 +174,7 @@ export function LoginPage() {
     try {
       const res = await api<{ token: string; user: AuthUser }>('/api/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ id: Number(idTrim), password }),
+        body: JSON.stringify({ id: Number(idTrim), password, rememberMe }),
       });
       loginSession(res.token, res.user);
       toast.success(`أهلاً بك، ${res.user.name}`);
@@ -302,8 +299,18 @@ export function LoginPage() {
               </div>
             </div>
 
-            {allowForgotPassword && (
-              <div className="flex justify-start pt-0.5">
+            <div className="flex items-center justify-between gap-2 pt-0.5">
+              <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-600 dark:text-zinc-300 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  className="h-3.5 w-3.5 rounded border-slate-300 dark:border-zinc-700 accent-[#065BAB] cursor-pointer"
+                />
+                <span>البقاء متصلاً تلقائياً</span>
+              </label>
+
+              {allowForgotPassword && (
                 <button
                   type="button"
                   onClick={() => {
@@ -314,8 +321,8 @@ export function LoginPage() {
                 >
                   هل نسيت كلمة المرور؟
                 </button>
-              </div>
-            )}
+              )}
+            </div>
 
             <Button
               type="submit"
@@ -355,22 +362,6 @@ export function LoginPage() {
             </button>
             .
           </p>
-
-          <div className="mt-3 flex justify-center">
-            <button
-              type="button"
-              onClick={handleDownloadGuide}
-              disabled={guideDownloading}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 dark:border-zinc-800 bg-slate-50/90 dark:bg-zinc-900/70 px-3 py-1.5 text-[11px] font-bold text-[#065BAB] dark:text-blue-400 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer disabled:opacity-60"
-            >
-              {guideDownloading ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <BookOpen className="h-3.5 w-3.5" />
-              )}
-              <span>تحميل دليل استخدام النظام (PDF)</span>
-            </button>
-          </div>
         </div>
 
         {/* Bottom Copyright matching classic footer */}

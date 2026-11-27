@@ -1,7 +1,83 @@
+const crypto = require('node:crypto');
 const jwt = require('jsonwebtoken');
 const db = require('../database/init');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'iems-local-dev-secret-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
+const SESSION_COOKIE_NAME = 'iems_session';
+
+function parseCookies(req) {
+  const header = String(req?.headers?.cookie || '');
+  const out = {};
+  if (!header) return out;
+  for (const part of header.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx <= 0) continue;
+    const key = part.slice(0, idx).trim();
+    const val = part.slice(idx + 1).trim();
+    if (!key) continue;
+    try {
+      out[key] = decodeURIComponent(val);
+    } catch {
+      out[key] = val;
+    }
+  }
+  return out;
+}
+
+function isHttpsRequest(req) {
+  if (req?.secure) return true;
+  const proto = String(req?.headers?.['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  return proto === 'https';
+}
+
+function getRequestHost(req) {
+  const fwd = String(req?.headers?.['x-forwarded-host'] || '').split(',')[0].trim().toLowerCase();
+  return fwd || String(req?.headers?.host || '').trim().toLowerCase();
+}
+
+function isSameOriginHeader(req) {
+  const targetHost = getRequestHost(req);
+  if (!targetHost) return false;
+  const origin = String(req?.headers?.origin || '').trim();
+  if (origin) {
+    try {
+      return new URL(origin).host.toLowerCase() === targetHost;
+    } catch {
+      return false;
+    }
+  }
+  const referer = String(req?.headers?.referer || '').trim();
+  if (referer) {
+    try {
+      return new URL(referer).host.toLowerCase() === targetHost;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+function setSessionCookie(res, req, token, maxAgeMs) {
+  const https = isHttpsRequest(req);
+  const opts = {
+    httpOnly: true,
+    path: '/',
+    sameSite: https ? 'none' : 'lax',
+    ...(https ? { secure: true, partitioned: true } : {}),
+    ...(typeof maxAgeMs === 'number' && maxAgeMs > 0 ? { maxAge: maxAgeMs } : {}),
+  };
+  res.cookie(SESSION_COOKIE_NAME, token, opts);
+}
+
+function clearSessionCookie(res, req) {
+  const https = isHttpsRequest(req);
+  res.clearCookie(SESSION_COOKIE_NAME, {
+    httpOnly: true,
+    path: '/',
+    sameSite: https ? 'none' : 'lax',
+    ...(https ? { secure: true, partitioned: true } : {}),
+  });
+}
 
 function normalizeShiftsList(rawShifts, fallbackShift) {
   const arr = Array.isArray(rawShifts) && rawShifts.length
@@ -56,15 +132,32 @@ function addHrCompanySql(sql, params, col, hrCompanies) {
 
 function requireJwtSecret(res) {
   if (JWT_SECRET) return true;
-  res.status(500).json({ error: 'JWT_SECRET غير مضبوط في Environment Variables على Vercel.' });
+  res.status(500).json({ error: 'JWT_SECRET غير مضبوط في Environment Variables.' });
   return false;
 }
 
 async function requireAuth(req, res, next) {
   if (!requireJwtSecret(res)) return;
   const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  const bearerToken = header.startsWith('Bearer ') ? header.slice(7).trim() : null;
+  const cookies = parseCookies(req);
+  const cookieToken = cookies[SESSION_COOKIE_NAME] || null;
+  const token = bearerToken || cookieToken;
+  const authSource = bearerToken ? 'bearer' : 'cookie';
+
   if (!token) return res.status(401).json({ error: 'مطلوب تسجيل الدخول' });
+
+  // Protect cookie-authenticated state-changing requests against CSRF
+  if (
+    authSource === 'cookie' &&
+    ['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(req.method || '').toUpperCase())
+  ) {
+    const hasCustomHeader = Boolean(req.headers['x-requested-with']);
+    if (!hasCustomHeader && !isSameOriginHeader(req)) {
+      return res.status(403).json({ error: 'تم رفض الطلب لأسباب أمنية.' });
+    }
+  }
+
   let decoded;
   try {
     decoded = jwt.verify(token, JWT_SECRET);
@@ -82,6 +175,7 @@ async function requireAuth(req, res, next) {
     const hrCompanies = fresh.role === 'hr_manager'
       ? normalizeCompaniesList(fresh.hr_companies, fresh.company)
       : (Array.isArray(fresh.hr_companies) ? fresh.hr_companies.map(normalizeCompanyToken).filter(Boolean) : []);
+    req.authSource = authSource;
     req.user = {
       ...decoded,
       id: fresh.id,
@@ -146,5 +240,6 @@ module.exports = {
   requireUploader, requireSystemCreator, isCreator, isHrManager, isAdmin, isAdminOrHr, isSupervisor,
   getSupervisorShifts, normalizeShiftsList,
   normalizeCompanyToken, normalizeCompaniesList, getHrCompanies, companyMatchesList, companyCanonSql, addHrCompanySql,
-  JWT_SECRET
+  parseCookies, setSessionCookie, clearSessionCookie, getRequestHost, isHttpsRequest,
+  JWT_SECRET, SESSION_COOKIE_NAME
 };

@@ -86,23 +86,6 @@ export async function resolveReportsAndSheetsConfig(): Promise<ReportsAndSheetsC
   return normalizeReportsAndSheetsConfig(cfg?.reportsAndSheets);
 }
 
-export function setCachedReportsAndSheetsConfig(
-  raw?: Partial<ReportsAndSheetsConfig> | null
-) {
-  if (!raw) {
-    invalidatePublicSystemConfigCache();
-    return;
-  }
-  const normalized = normalizeReportsAndSheetsConfig(raw);
-  if (cachedPublicConfig) {
-    cachedPublicConfig = {
-      ...cachedPublicConfig,
-      reportsAndSheets: normalized,
-    };
-    cachedAt = Date.now();
-  }
-}
-
 export function invalidatePublicSystemConfigCache() {
   cachedPublicConfig = null;
   cachedAt = 0;

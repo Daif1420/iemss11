@@ -363,45 +363,6 @@ export interface RequestMetaPayload {
   };
 }
 
-export interface MissingRequestRow {
-  id: number;
-  employee_id: number;
-  employee_name: string;
-  shift?: string | null;
-  entry_date: string;
-  stage: string;
-  quantity: number;
-  reason_type: 'missing' | 'incomplete' | 'wrong' | string;
-  notes?: string | null;
-  status: RequestStatus;
-  old_value?: number | null;
-  new_value?: number | null;
-  current_value?: number | null;
-  reviewed_by_name?: string | null;
-  reviewed_at?: string | null;
-  reject_reason?: string | null;
-  created_at: string;
-}
-
-export interface EmployeeRequestRow {
-  id: number;
-  employee_id: number;
-  employee_name: string;
-  shift?: string | null;
-  kind: 'leave' | 'advance';
-  leave_type?: 'annual' | 'casual' | 'sick' | 'unpaid' | string | null;
-  start_date?: string | null;
-  end_date?: string | null;
-  days?: number | null;
-  amount?: number | null;
-  notes?: string | null;
-  status: RequestStatus;
-  reviewed_by_name?: string | null;
-  reviewed_at?: string | null;
-  reject_reason?: string | null;
-  created_at: string;
-}
-
 export interface NotificationItem {
   id: number;
   type: string;
@@ -438,15 +399,6 @@ export interface AuditLogRow {
   details?: Record<string, unknown>;
   ip?: string | null;
   created_at: string;
-}
-
-export interface ReportStageTotal {
-  stage: string;
-  total: number;
-  employee_count: number;
-  top_employee_id?: number | null;
-  top_employee_name?: string | null;
-  top_value?: number;
 }
 
 export interface ReportShiftTotal {

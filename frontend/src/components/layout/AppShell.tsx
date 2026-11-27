@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   Bell,
-  BookOpen,
+  BellOff,
+  BellRing,
   CheckCheck,
   ChevronDown,
   ChevronUp,
@@ -30,8 +31,12 @@ import {
 import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
+import {
+  showServiceWorkerNotification,
+  syncAppBadge,
+  usePushNotifications,
+} from '@/hooks/usePushNotifications';
 import { api, ApiError } from '@/lib/api';
-import { downloadSystemGuidePdf } from '@/lib/export';
 import { ROLE_LABELS, fmtDateTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { NotificationItem } from '@/types/iems';
@@ -93,6 +98,15 @@ export function AppShell({
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [pushBannerDismissed, setPushBannerDismissed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('iems_push_banner_dismissed') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const initialNotifLoadedRef = useRef(false);
+  const seenNotifIdsRef = useRef<Set<number>>(new Set());
 
   // Unified Account Dropdown + Profile / Password Dialog
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
@@ -102,20 +116,6 @@ export function AppShell({
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [profileSaving, setProfileSaving] = useState(false);
-  const [guideDownloading, setGuideDownloading] = useState(false);
-
-  const handleDownloadGuide = async () => {
-    if (guideDownloading) return;
-    setGuideDownloading(true);
-    try {
-      await downloadSystemGuidePdf();
-      toast.success('تم بدء تحميل دليل النظام التعريفي (PDF)');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'تعذر تحميل دليل النظام');
-    } finally {
-      setGuideDownloading(false);
-    }
-  };
 
   const currentPath = location.pathname;
 
@@ -152,34 +152,137 @@ export function AppShell({
     if (!user) return;
     try {
       const res = await api<{ items: NotificationItem[]; unread: number }>('/api/notifications');
-      setNotifications(res.items || []);
-      setUnreadCount(Number(res.unread || 0));
+      const items = res.items || [];
+      const unread = Number(res.unread || 0);
+
+      if (initialNotifLoadedRef.current) {
+        const freshUnread = items.filter(
+          (n) => !n.is_read && !seenNotifIdsRef.current.has(n.id)
+        );
+        if (freshUnread.length > 0) {
+          const newest = freshUnread[0];
+          if (document.hidden) {
+            void showServiceWorkerNotification({
+              title: newest.title,
+              body: newest.body || undefined,
+              link: newest.link && !newest.link.includes('missing-data') ? newest.link : '/requests.html',
+              tag: `iems-notif-${newest.id}`,
+            });
+          } else {
+            toast.info(newest.title, {
+              description: newest.body || undefined,
+            });
+          }
+        }
+      }
+
+      initialNotifLoadedRef.current = true;
+      seenNotifIdsRef.current = new Set(items.map((n) => n.id));
+      setNotifications(items);
+      setUnreadCount(unread);
+      syncAppBadge(unread);
     } catch {
       // silent polling failure
     }
   }, [user]);
 
+  const {
+    isNotificationSupported,
+    isPushSupported,
+    permission: pushPermission,
+    isSubscribed: pushSubscribed,
+    busy: pushBusy,
+    enablePushNotifications,
+    disablePushNotifications,
+    sendTestPush,
+  } = usePushNotifications({
+    enabled: Boolean(user),
+    onPushReceived: (payload) => {
+      void loadNotifications();
+      if (!document.hidden && payload.title) {
+        toast.info(payload.title, { description: payload.body || undefined });
+      }
+    },
+    onNavigate: (url) => {
+      if (url && !url.includes('missing-data')) {
+        navigate(url);
+      }
+    },
+  });
+
+  useEffect(() => {
+    initialNotifLoadedRef.current = false;
+    seenNotifIdsRef.current.clear();
+  }, [user?.id]);
+
   useEffect(() => {
     loadNotifications();
     const timer = window.setInterval(() => {
       loadNotifications();
-    }, 45000);
+    }, 30000);
 
     const onRefresh = () => {
       loadNotifications();
     };
+    const onVisibilityOrFocus = () => {
+      if (!document.hidden) {
+        loadNotifications();
+      }
+    };
     window.addEventListener('iems:refresh-badges', onRefresh);
+    window.addEventListener('focus', onVisibilityOrFocus);
+    document.addEventListener('visibilitychange', onVisibilityOrFocus);
     return () => {
       window.clearInterval(timer);
       window.removeEventListener('iems:refresh-badges', onRefresh);
+      window.removeEventListener('focus', onVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', onVisibilityOrFocus);
     };
   }, [loadNotifications]);
+
+  const handleEnablePush = async () => {
+    const res = await enablePushNotifications();
+    if (res.ok) {
+      setPushBannerDismissed(true);
+      try {
+        localStorage.setItem('iems_push_banner_dismissed', '1');
+      } catch {
+        // ignore storage error
+      }
+      toast.success('تم تفعيل إشعارات الجهاز بنجاح، ستصلك التنبيهات فورياً');
+    } else if (res.reason === 'denied') {
+      toast.error('تم رفض إذن الإشعارات من المتصفح، يمكنك تفعيلها من إعدادات الموقع');
+    } else if (res.reason === 'unsupported') {
+      toast.error('المتصفح الحالي لا يدعم الإشعارات');
+    } else {
+      toast.error('تعذّر تفعيل إشعارات الجهاز حالياً');
+    }
+  };
+
+  const handleDismissPushBanner = () => {
+    setPushBannerDismissed(true);
+    try {
+      localStorage.setItem('iems_push_banner_dismissed', '1');
+    } catch {
+      // ignore storage error
+    }
+  };
+
+  const handleSendTestPush = async () => {
+    const ok = await sendTestPush();
+    if (ok) {
+      toast.success('تم إرسال إشعار تجريبي إلى جهازك');
+    } else {
+      toast.error('تعذّر إرسال الإشعار التجريبي');
+    }
+  };
 
   const handleMarkAllRead = async () => {
     try {
       await api('/api/notifications/read-all', { method: 'POST' });
       setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
       setUnreadCount(0);
+      syncAppBadge(0);
     } catch {
       toast.error('تعذر تحديث حالة الإشعارات');
     }
@@ -192,7 +295,11 @@ export function AppShell({
         setNotifications((prev) =>
           prev.map((n) => (n.id === item.id ? { ...n, is_read: true } : n))
         );
-        setUnreadCount((c) => Math.max(0, c - 1));
+        setUnreadCount((c) => {
+          const next = Math.max(0, c - 1);
+          syncAppBadge(next);
+          return next;
+        });
       } catch {
         // ignore read mark error
       }
@@ -531,6 +638,64 @@ export function AppShell({
                     </button>
                   )}
                 </div>
+
+                {/* Device / PWA Push Notification Status Control */}
+                {isNotificationSupported && (
+                  <div className="flex items-center justify-between gap-2 border-b border-border bg-secondary/40 px-3.5 py-2 text-[11px]">
+                    {pushPermission === 'granted' ? (
+                      <>
+                        <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-600 dark:text-emerald-400">
+                          <BellRing className="h-3.5 w-3.5 shrink-0" />
+                          <span>
+                            {pushSubscribed ? 'إشعارات الجهاز مفعّلة' : 'إشعارات المتصفح مفعّلة'}
+                          </span>
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={pushBusy}
+                            onClick={handleSendTestPush}
+                            className="font-bold text-primary hover:underline cursor-pointer disabled:opacity-50"
+                          >
+                            تجربة إشعار
+                          </button>
+                          {isPushSupported && pushSubscribed && (
+                            <button
+                              type="button"
+                              disabled={pushBusy}
+                              onClick={() => void disablePushNotifications()}
+                              className="text-muted-foreground hover:text-destructive cursor-pointer disabled:opacity-50"
+                              title="إيقاف إشعارات هذا الجهاز"
+                            >
+                              إيقاف
+                            </button>
+                          )}
+                        </div>
+                      </>
+                    ) : pushPermission === 'denied' ? (
+                      <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                        <BellOff className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                        <span>إشعارات الجهاز محظورة من إعدادات المتصفح</span>
+                      </span>
+                    ) : (
+                      <>
+                        <span className="text-muted-foreground font-medium">
+                          استلم تنبيهات الطلبات على جهازك
+                        </span>
+                        <button
+                          type="button"
+                          disabled={pushBusy}
+                          onClick={handleEnablePush}
+                          className="inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-[11px] font-bold text-primary-foreground hover:bg-primary/90 cursor-pointer disabled:opacity-50"
+                        >
+                          <BellRing className="h-3 w-3" />
+                          <span>تفعيل الآن</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+
                 <div className="max-h-80 overflow-y-auto divide-y divide-border/70">
                   {notifications.length === 0 ? (
                     <div className="py-8 text-center text-xs text-muted-foreground">
@@ -587,19 +752,6 @@ export function AppShell({
               ) : (
                 <Moon className="h-4 w-4 text-muted-foreground" />
               )}
-            </Button>
-
-            {/* System Guide PDF Download */}
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={handleDownloadGuide}
-              disabled={guideDownloading}
-              className="h-8 w-8 min-[360px]:h-9 min-[360px]:w-9 rounded-xl"
-              aria-label="تحميل دليل استخدام النظام PDF"
-              title="تحميل دليل استخدام النظام (PDF)"
-            >
-              <BookOpen className="h-4 w-4 text-[#065BAB] dark:text-blue-400" />
             </Button>
 
             {/* In-App PWA Install Button (hidden automatically in standalone mode) */}
@@ -664,13 +816,6 @@ export function AppShell({
                   >
                     <User className="h-4 w-4 text-muted-foreground" />
                     <span>الملف الشخصي</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onSelect={handleDownloadGuide}
-                    className="rounded-lg px-3 py-2 text-xs font-semibold gap-2.5 cursor-pointer"
-                  >
-                    <BookOpen className="h-4 w-4 text-[#065BAB] dark:text-blue-400" />
-                    <span>دليل استخدام النظام (PDF)</span>
                   </DropdownMenuItem>
                   {isCreator && (
                     <DropdownMenuItem
@@ -888,6 +1033,45 @@ export function AppShell({
 
       {/* Main Content */}
       <main className={cn('flex-1 w-full mx-auto px-4 sm:px-6 py-6', maxWidthClass)}>
+        {isNotificationSupported && pushPermission === 'default' && !pushBannerDismissed && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-primary/25 bg-primary/5 px-4 py-2.5 text-xs no-print">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <BellRing className="h-4 w-4" />
+              </span>
+              <div>
+                <div className="font-bold text-foreground">
+                  فعّل إشعارات التطبيق على جهازك
+                </div>
+                <div className="text-[11px] text-muted-foreground">
+                  لتصلك تنبيهات الموافقة على الطلبات والإشعارات الجديدة فورياً حتى عند إغلاق التطبيق.
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                disabled={pushBusy}
+                onClick={handleEnablePush}
+                className="h-8 gap-1.5 rounded-lg text-xs font-bold"
+              >
+                <BellRing className="h-3.5 w-3.5" />
+                <span>تفعيل الإشعارات</span>
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={handleDismissPushBanner}
+                aria-label="إخفاء"
+                className="h-8 w-8 rounded-lg text-muted-foreground"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        )}
         {children}
       </main>
 
