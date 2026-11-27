@@ -1,4 +1,4 @@
-import type { EmployeeStatus, RequestStatus, Role } from '@/types/iems';
+import type { EmployeeStatus, Role } from '@/types/iems';
 
 export const DEPARTURE_REASONS = [
   'استقالة',
@@ -22,32 +22,6 @@ export const STATUS_LABELS: Record<EmployeeStatus, string> = {
   active: 'نشط',
   left: 'غادر',
   archive: 'أرشيف',
-};
-
-export const MISSING_REASONS: Record<string, string> = {
-  missing: 'اليوم غير مسجل نهائيًا',
-  incomplete: 'البيانات مسجلة بشكل ناقص',
-  wrong: 'الكمية المسجلة غير صحيحة',
-};
-
-export const LEAVE_TYPES: Record<string, string> = {
-  annual: 'اعتيادية',
-  casual: 'عارضة',
-  sick: 'مرضية',
-  unpaid: 'بدون مرتب',
-};
-
-export const REQUEST_STATUS_LABELS: Record<RequestStatus, string> = {
-  pending: 'قيد المراجعة',
-  approved: 'معتمد',
-  rejected: 'مرفوض',
-  cancelled: 'ملغي',
-};
-
-export const REQUEST_KIND_LABELS: Record<'missing' | 'leave' | 'advance', string> = {
-  missing: 'استكمال بيانات',
-  leave: 'إجازة',
-  advance: 'سلفة',
 };
 
 export function fmtNumber(v: unknown): string {
@@ -155,7 +129,3 @@ export function payrollCycle(
   return { start: s, end: end.toISOString().slice(0, 10), monthKey: s.slice(0, 7) };
 }
 
-export function stageDisplay(stage: string[] | string | undefined | null, joiner = ' + '): string {
-  if (!stage || stage === '__ALL__') return 'كل المراحل';
-  return Array.isArray(stage) ? stage.join(joiner) : String(stage);
-}

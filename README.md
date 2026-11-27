@@ -1,52 +1,81 @@
-# IEMS — Intercom Employee Management System
+# IEMS — Vercel Edition
 
-- Frontend: React 19 + Vite + Tailwind (`frontend/`)
-- API: Express 5 running as a Vercel Node Function (`api/index.js` → `backend/server.js`)
-- Database: PostgreSQL (`pg`), JWT + bcrypt auth. Without `DATABASE_URL` the API uses an in-memory mock DB seeded from `database/initial-data.json`.
+Single Vercel deployment:
 
-## Environment variables
+- React + Vite frontend (`frontend/`)
+- Express 5 API running as a Vercel Node Function (`api/index.js` -> `backend/server.js`)
+- PostgreSQL via `pg`, JWT + bcrypt auth
 
-See `.env.example`. In production `DATABASE_URL` and `JWT_SECRET` are required.
-`GET /api/health` reports whether each one is set (works even when they aren't).
+## Required Vercel environment variables
 
-## Database
+```text
+DATABASE_URL=your PostgreSQL connection string
+JWT_SECRET=a-long-random-secret
+NODE_ENV=production
+```
 
-The schema is created automatically on the first request after a cold start:
-`backend/database/init.js` runs `backend/database/bootstrap.sql` under a Postgres advisory lock.
-`database/clean-production.sql` is a manual, one-time script that wipes imported data
-(keeps only the primary admin) — run it by hand before the first clean import.
+Both are checked at runtime and produce a clear JSON error if missing.
+`GET /api/health` reports whether each one is set and works even when they
+aren't — use it first when diagnosing a deployment.
+
+## How the schema is created
+
+The API creates its own schema on the first request after a cold start:
+`backend/database/init.js` runs `backend/database/bootstrap.sql` under a
+Postgres advisory lock, so concurrent serverless invocations can't race. There
+is no database step in the build.
+
+> The `database/` folder at the repo root now only holds `initial-data.json`
+> (seed data for the in-memory mock database used when `DATABASE_URL` is unset;
+> loaded by `backend/database/mock-db.js`) and `clean-production.sql` (a manual,
+> one-time production reset script — never run automatically).
+
+## Master Excel import
+
+`stage_daily` rows are inserted in PostgreSQL batches of 500 to avoid statement
+timeouts. Each stage's monthly target is read from the formula in `Master!AO`
+and stored in `employee_stage_targets` by employee, shift and payroll cycle.
+
+## Routing
+
+The app's routes are literal `.html` filenames (`/home.html`, `/reports.html`, ...)
+because the legacy page scripts hardcode them in redirects and in the active-nav
+check. `vercel.json` rewrites each one to `/index.html` so React Router can
+handle it, and rewrites `/api/*` to the function. `frontend/vite.config.ts`
+reproduces the same rewrites for `npm run dev`.
 
 ## Local development
 
 ```bash
-npm install            # installs API deps, then frontend deps (postinstall)
-node backend/server.js # API on :3000
-npm --prefix frontend run dev   # frontend on :5173, proxies /api to :3000
+npm install                 # API dependencies (root package.json)
+npm --prefix frontend ci
+
+node backend/server.js      # API on :3000
+npm run dev                 # frontend on :5173, proxies /api to :3000
 ```
 
-Set `VITE_API_TARGET` to proxy somewhere other than `http://localhost:3000`.
-
-## Scripts
-
-| Command | What it does |
-| --- | --- |
-| `npm run build` | Type-check + production build of the frontend |
-| `npm run lint` | oxlint on `frontend/src` |
-| `npm start` | Serve API + built frontend |
-
-## Routing
-
-Routes are literal `.html` paths (`/home.html`, `/reports.html`, …). `vercel.json` rewrites each to
-`/index.html` for React Router, and `/api/*` to the function. `frontend/vite.config.ts` does the same for dev.
+Set `VITE_API_TARGET` to point the dev proxy somewhere other than
+`http://localhost:3000`.
 
 ## Roles
 
-Permissions must stay in sync in three places: `frontend/src/components/layout/AppShell.tsx` (nav),
-`ProtectedRoute` in `App.tsx`, and `backend/middleware/auth.js`.
+One permission table is applied in three places and they must stay in sync:
+`app-shell.js` (nav visibility), the guard at the top of each page script, and
+the role middleware in `backend/middleware/auth.js`.
 
-## Import notes
+| Page | Allowed roles |
+| --- | --- |
+| Home | all signed-in users |
+| Employees, Import, Reports | `supervisor`, `admin`, `system_creator` |
+| Manual entry | `admin`, `system_creator` |
+| Audit logs, Themes | `system_creator` |
 
-The Master Excel import inserts `stage_daily` rows in batches of 500 (avoids statement timeouts) and stores each
-stage's monthly target (from `Master!AO`) in `employee_stage_targets`.
+## Styling
 
-Never commit `.env` files or a real `JWT_SECRET`.
+All colour tokens live in `frontend/src/legacy-style.css`. Per-page stylesheets
+in `frontend/src/legacy-page-styles/` are injected *after* the global sheet, so
+redefining `:root` there silently overrides the palette on that page only —
+don't. Page scripts that inject a `<style>` into `<head>` must tag it
+`data-iems-page-style` so `useLegacyScripts` can remove it on navigation.
+
+Do not commit `.env` files or a real `JWT_SECRET`.

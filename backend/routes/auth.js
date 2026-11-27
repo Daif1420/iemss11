@@ -2,10 +2,19 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('../database/init');
-const { requireAuth, normalizeCompaniesList, JWT_SECRET } = require('../middleware/auth');
+const {
+  requireAuth,
+  normalizeCompaniesList,
+  setSessionCookie,
+  clearSessionCookie,
+  JWT_SECRET,
+} = require('../middleware/auth');
 const { getSystemConfig } = require('../utils/systemSettings');
 
 const router = express.Router();
+
+const PERSISTENT_SESSION_DAYS = 30;
+const PERSISTENT_SESSION_MS = PERSISTENT_SESSION_DAYS * 24 * 60 * 60 * 1000;
 
 // simple in-memory rate limiting per IP for login attempts
 const attempts = new Map(); // ip -> { count, resetAt }
@@ -28,6 +37,23 @@ function recordFailure(ip) {
 }
 function clearFailures(ip) { attempts.delete(ip); }
 
+function signUserToken(emp, hrCompanies, { remember = true, sessionHours = 8 } = {}) {
+  const hours = remember ? Math.max(Number(sessionHours) || 8, PERSISTENT_SESSION_DAYS * 24) : (Number(sessionHours) || 8);
+  return jwt.sign(
+    {
+      id: emp.id,
+      role: emp.role,
+      name: emp.name,
+      shift: emp.shift,
+      supervisorShifts: emp.supervisor_shifts || [],
+      hrCompanies,
+      remember: Boolean(remember),
+    },
+    JWT_SECRET,
+    { expiresIn: `${hours}h` }
+  );
+}
+
 router.post('/login', async (req, res) => {
   const sysCfg = await getSystemConfig();
   const maxAttempts = sysCfg.general.maxLoginAttempts || 8;
@@ -39,10 +65,11 @@ router.post('/login', async (req, res) => {
   }
 
   if (!JWT_SECRET) {
-    return res.status(500).json({ error: 'JWT_SECRET غير مضبوط في Environment Variables على Vercel.' });
+    return res.status(500).json({ error: 'JWT_SECRET غير مضبوط في Environment Variables.' });
   }
 
-  const { id, password } = req.body || {};
+  const { id, password, rememberMe } = req.body || {};
+  const remember = rememberMe !== false;
   if (id === undefined || id === null || id === '' || !password) {
     return res.status(400).json({ error: 'من فضلك أدخل الـID وكلمة المرور' });
   }
@@ -51,14 +78,10 @@ router.post('/login', async (req, res) => {
   }
 
   const emp = (await db.prepare('SELECT * FROM employees WHERE id = ?').get(Number(id)));
-  // Async compare: compareSync blocked the whole event loop for the duration of
-  // the hash, stalling every other in-flight request on the same instance.
   const ok = !!emp && await bcrypt.compare(String(password), emp.password_hash);
 
   if (!ok) recordFailure(ip); else clearFailures(ip);
 
-  // Audit rows are best-effort and run in parallel: a logging failure must never
-  // block or break the login itself.
   const audits = [
     db.prepare('INSERT INTO login_audit (employee_id, success, ip) VALUES (?, ?, ?)')
       .run(emp ? emp.id : null, ok ? 1 : 0, ip),
@@ -80,18 +103,8 @@ router.post('/login', async (req, res) => {
     ? normalizeCompaniesList(emp.hr_companies, emp.company)
     : (Array.isArray(emp.hr_companies) ? emp.hr_companies : []);
 
-  const token = jwt.sign(
-    {
-      id: emp.id,
-      role: emp.role,
-      name: emp.name,
-      shift: emp.shift,
-      supervisorShifts: emp.supervisor_shifts || [],
-      hrCompanies,
-    },
-    JWT_SECRET,
-    { expiresIn: `${sessionHours}h` }
-  );
+  const token = signUserToken(emp, hrCompanies, { remember, sessionHours });
+  setSessionCookie(res, req, token, remember ? PERSISTENT_SESSION_MS : undefined);
 
   res.json({
     token,
@@ -108,6 +121,11 @@ router.post('/login', async (req, res) => {
       must_change_password: !!emp.must_change_password,
     },
   });
+});
+
+router.post('/logout', (req, res) => {
+  clearSessionCookie(res, req);
+  res.json({ ok: true });
 });
 
 router.get('/forgot-password-options', async (_req, res) => {
@@ -174,7 +192,19 @@ router.get('/me', requireAuth, async (req, res) => {
   const hrCompanies = emp.role === 'hr_manager'
     ? normalizeCompaniesList(emp.hr_companies, emp.company)
     : (Array.isArray(emp.hr_companies) ? emp.hr_companies : []);
+
+  let refreshedToken = null;
+  if (req.user?.remember !== false) {
+    const sysCfg = await getSystemConfig();
+    refreshedToken = signUserToken(emp, hrCompanies, {
+      remember: true,
+      sessionHours: sysCfg.general.sessionExpiryHours || 8,
+    });
+    setSessionCookie(res, req, refreshedToken, PERSISTENT_SESSION_MS);
+  }
+
   res.json({
+    ...(refreshedToken ? { token: refreshedToken } : {}),
     user: {
       id: emp.id,
       name: emp.name,
