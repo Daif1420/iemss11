@@ -46,6 +46,25 @@ export function setUnauthorizedHandler(fn: () => void) {
   onUnauthorizedCallback = fn;
 }
 
+/** Readable fallback message when the server replied without a JSON `error` field. */
+function describeHttpFailure(status: number): string {
+  switch (status) {
+    case 413:
+      return 'حجم البيانات المرسلة كبير جدًا على الخادم (413). قلّل حجم الملف أو قسّمه.';
+    case 502:
+    case 503:
+      return `الخادم غير متاح مؤقتًا (${status}). حاول مرة أخرى بعد قليل.`;
+    case 504:
+      return 'انتهت مهلة تنفيذ العملية على الخادم (504). جرّب تقليل حجم البيانات أو أعد المحاولة.';
+    case 500:
+      return 'حدث خطأ داخل الخادم (500). راجع سجلات الخادم (Vercel Logs).';
+    case 404:
+      return 'المسار المطلوب غير موجود (404).';
+    default:
+      return `حدث خطأ غير متوقع (رمز الخطأ ${status}).`;
+  }
+}
+
 export async function api<T = unknown>(path: string, opts: RequestInit = {}): Promise<T> {
   const token = authStorage.getToken();
   const headers: Record<string, string> = {
@@ -70,7 +89,7 @@ export async function api<T = unknown>(path: string, opts: RequestInit = {}): Pr
   }
   const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
-    throw new ApiError(String(data.error || 'حدث خطأ غير متوقع'), res.status, data);
+    throw new ApiError(String(data.error || describeHttpFailure(res.status)), res.status, data);
   }
   return data as T;
 }
@@ -115,7 +134,7 @@ export function apiUploadWithProgress<T = unknown>(
         // ignore parse errors
       }
       if (xhr.status < 200 || xhr.status >= 300) {
-        reject(new Error(String(data.error || 'حدث خطأ أثناء العملية.')));
+        reject(new Error(String(data.error || describeHttpFailure(xhr.status))));
         return;
       }
       resolve(data as T);
