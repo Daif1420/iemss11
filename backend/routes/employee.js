@@ -53,41 +53,6 @@ function dateFilterSql(alias, from, to, params) {
   return sql;
 }
 
-router.get('/list', requireAuth, async (req, res) => {
-  const hrCompanies = getHrCompanies(req);
-  if (hrCompanies) {
-    if (!hrCompanies.length) return res.json({ employees: [] });
-    const params = [];
-    const whereSql = addHrCompanySql("role = 'employee'", params, 'company', hrCompanies);
-    const rows = (await db.prepare(`
-      SELECT id, name, shift, company, department
-      FROM employees WHERE ${whereSql} ORDER BY name
-    `).all(...params));
-    return res.json({ employees: rows });
-  }
-  if (isAdminOrHr(req)) {
-    const rows = (await db.prepare(`
-      SELECT id, name, shift, company, department
-      FROM employees WHERE role = 'employee' ORDER BY name
-    `).all());
-    return res.json({ employees: rows });
-  }
-  const supShifts = getSupervisorShifts(req);
-  if (supShifts) {
-    if (!supShifts.length) return res.json({ employees: [] });
-    const rows = (await db.prepare(`
-      SELECT id, name, shift, company, department
-      FROM employees WHERE role = 'employee' AND UPPER(TRIM(COALESCE(shift,''))) IN (${supShifts.map(() => '?').join(',')}) ORDER BY name
-    `).all(...supShifts));
-    return res.json({ employees: rows });
-  }
-  const self = (await db.prepare(`
-    SELECT id, name, shift, company, department
-    FROM employees WHERE id = ? AND role = 'employee'
-  `).get(req.user.id));
-  res.json({ employees: self ? [self] : [] });
-});
-
 router.get('/stages', requireAuth, async (req, res) => {
   if (isHrManager(req)) {
     return res.json({ stages: [] });
@@ -350,11 +315,6 @@ router.get('/dashboard', requireAuth, async (req, res) => {
   }
 
   res.json(payload);
-});
-
-router.get('/months', requireAuth, async (req, res) => {
-  const rows = await db.prepare(`SELECT DISTINCT month_start FROM employee_monthly_summary ORDER BY month_start DESC`).all();
-  res.json({ months: rows.map(r => String(r.month_start).slice(0, 7)) });
 });
 
 router.get('/:id', requireAuth, async (req, res) => {

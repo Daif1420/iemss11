@@ -225,7 +225,6 @@ function requireSupervisor(req, res, next) {
   next();
 }
 
-function requireAdminOrSupervisor(req, res, next) { return requireSupervisor(req, res, next); }
 
 function requireUploader(req, res, next) {
   if (!requireJwtSecret(res)) return;
@@ -236,7 +235,7 @@ function requireUploader(req, res, next) {
 }
 
 module.exports = {
-  requireAuth, requireAdmin, requireAdminOrHr, requireSupervisor, requireAdminOrSupervisor,
+  requireAuth, requireAdmin, requireAdminOrHr, requireSupervisor,
   requireUploader, requireSystemCreator, isCreator, isHrManager, isAdmin, isAdminOrHr, isSupervisor,
   getSupervisorShifts, normalizeShiftsList,
   normalizeCompanyToken, normalizeCompaniesList, getHrCompanies, companyMatchesList, companyCanonSql, addHrCompanySql,

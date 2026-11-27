@@ -115,8 +115,7 @@ async function ensureDatabase() {
   return initializationPromise;
 }
 
-function pragma() { return undefined; }
 
 function isMock() { return !hasDatabaseUrl; }
 
-module.exports = { pool, query, prepare, transaction, exec, pragma, ensureDatabase, isMock };
+module.exports = { pool, query, prepare, transaction, exec, ensureDatabase, isMock };

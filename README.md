@@ -38,8 +38,7 @@ and stored in `employee_stage_targets` by employee, shift and payroll cycle.
 ## Routing
 
 The app's routes are literal `.html` filenames (`/home.html`, `/reports.html`, ...)
-because the legacy page scripts hardcode them in redirects and in the active-nav
-check. `vercel.json` rewrites each one to `/index.html` so React Router can
+because the app's redirects and active-nav check use them. `vercel.json` rewrites each one to `/index.html` so React Router can
 handle it, and rewrites `/api/*` to the function. `frontend/vite.config.ts`
 reproduces the same rewrites for `npm run dev`.
 
@@ -59,7 +58,7 @@ Set `VITE_API_TARGET` to point the dev proxy somewhere other than
 ## Roles
 
 One permission table is applied in three places and they must stay in sync:
-`app-shell.js` (nav visibility), the guard at the top of each page script, and
+`frontend/src/components/layout/AppShell.tsx` (nav visibility), the `roles` of each route in `frontend/src/App.tsx`, and
 the role middleware in `backend/middleware/auth.js`.
 
 | Page | Allowed roles |
@@ -71,10 +70,6 @@ the role middleware in `backend/middleware/auth.js`.
 
 ## Styling
 
-All colour tokens live in `frontend/src/legacy-style.css`. Per-page stylesheets
-in `frontend/src/legacy-page-styles/` are injected *after* the global sheet, so
-redefining `:root` there silently overrides the palette on that page only —
-don't. Page scripts that inject a `<style>` into `<head>` must tag it
-`data-iems-page-style` so `useLegacyScripts` can remove it on navigation.
+Styling uses Tailwind CSS v4; global tokens live in `frontend/src/styles/index.css`.
 
 Do not commit `.env` files or a real `JWT_SECRET`.
